@@ -546,6 +546,10 @@ pub fn repo_install(app: AppHandle, token: String, ids: Vec<String>) -> Result<V
     }
     let _ = std::fs::remove_dir_all(&from);
     let state = app.state::<Arc<IslandState>>().inner().clone();
+    // (switched off, whatever was on under this id before)
+    for id in &done {
+        state.plugins.set(id, false);
+    }
     state.plugins.rescan();
     plugins::sync_audio(&state);
     let _ = app.emit("plugins-changed", json!(null));

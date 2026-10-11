@@ -7,7 +7,7 @@ import { initFloats } from "./floats.js";
 import { head } from "./head.js";
 import { initPluginUi, pluginCard, setRings, whenText } from "./pluginui.js";
 import { plugins } from "./plugins/index.js";
-import { addFromGitHub } from "./repo.js";
+import { addFromGitHub, askMoved } from "./repo.js";
 import { eyes } from "./plugins/eyes.js";
 import { soundLight } from "./plugins/sound-light.js";
 import { updateAudio } from "./sound.js";
@@ -1745,9 +1745,30 @@ async function renderPlugins() {
 		head.append(up);
 		list.push(head, ...members.map((p) => pluginItem(p, renderPlugins)));
 	}
+	// (nothing from a repository yet: the way to it, first)
+	if (!groups.size) {
+		const get = el("div", "pg-get");
+		const words = el("div");
+		words.append(el("b", null, "Get plugins"), el("span", null, "Time, Calendar and more, from Llyme/nadi-plugins."));
+		const go = el("button", "set-btn go", "Browse");
+		go.type = "button";
+		go.addEventListener("click", () => addFromGitHub({ prefill: "Llyme/nadi-plugins", tint: tintOf, onChange: renderPlugins }));
+		get.append(words, go);
+		list.unshift(get);
+	}
 	document.getElementById("plugin-list").replaceChildren(...list);
 	scheduleHubHeight();
+	checkMoved(listing);
 }
+
+// Time and Calendar used to come inside the app: whoever had them on is asked once, at the start
+let movedAsked = false;
+function checkMoved(listing) {
+	if (!listing?.moved?.length || movedAsked) return;
+	movedAsked = true;
+	askMoved({ moved: listing.moved, tint: tintOf, onChange: renderPlugins });
+}
+if (!FLOATS) setTimeout(() => invoke("plugin_list").then(checkMoved).catch(() => {}), 2500);
 document.getElementById("plugin-dnd").addEventListener("change", (e) => invoke("plugin_dnd", { on: e.target.checked }));
 document.getElementById("plugin-add").addEventListener("click", () => addFromGitHub({ tint: tintOf, onChange: renderPlugins }));
 document.getElementById("plugin-folder").addEventListener("click", () => invoke("plugin_folder"));

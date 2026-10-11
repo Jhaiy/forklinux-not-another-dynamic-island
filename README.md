@@ -67,18 +67,18 @@ It is Windows-only for now. The goal is to stay light: it should never make the 
 - **Plugins.** The island is a window manager for cards; what it shows comes from plugins, and its own features are
   plugins too. A plugin is a folder with a `manifest.json`: a *declarative* one names an address to poll (JSON, or a
   calendar) and writes its card, its pill, its rings and a banner (when something happens) as templates over the answer;
-  a *module* is a WebAssembly file (a Rust SDK and examples are in `plugins/`) that is called with what it may see and
+  a *module* is a WebAssembly file (a Rust SDK and examples are in [nadi-plugins](https://github.com/Llyme/nadi-plugins)) that is called with what it may see and
   answers with what the island is to do. It may see what is playing (title and position), the calendar, how busy the PC
   is, the programs that have a window, the levels of the sound (never the sound) or a file that changed. It answers with
-  a card, a **pill** on the collapsed island, **rings** in the hub, buttons, banners, events for the calendar. It has no
+  a card, a **pill** on the collapsed island, **rings** in the hub, **widgets** for the head and a **pane**, buttons, banners, events for the calendar. It has no
   network, a time budget for each call and a memory cap, and a module that keeps failing is switched off. The island draws
   everything from a few building blocks, so a plugin cannot make it lag. The *Time* and *Calendar*
-  plugins that come with the app are written this way, and are carried by the app as any plugin could be; a few others
+  plugins are written this way and come from the nadi-plugins repository (the island itself starts blank); a few others
   (games, work, the page reader, downloads, Claude Code, now playing, the notification mirror, the eyes, the sound light, the system meters) are written in Rust,
   because they need what a sandbox must not hand out (the process list, performance counters, files and the login of other
   programs). Settings > Plugins lists them all the same way: what each one asks to see before you switch it on, its own
   settings, a mute for its banners, and Do not disturb. Banners wait by priority. Examples (weather, an audio meter, a
-  game clock, a busy meter) are in `plugins/`, to learn from: they are not part of the app. The format is in [PLUGINS.md](PLUGINS.md).
+  game clock, a busy meter) are in nadi-plugins too, to learn from. The format is in [PLUGINS.md](PLUGINS.md).
 
 To call the island, rest the cursor on the top edge of a monitor: a glow builds up, and the island lands.
 Right-click the island to pin or unpin it. Settings are in the tray icon's menu.
@@ -121,10 +121,9 @@ Debug aids, set as environment variables before starting the exe: `DI_OPEN_HUB=1
   the hub. There is no build step.
 - `src-tauri/src/` is the backend. `lib.rs` has the window state machine (reveal, hide, springs, resize);
   the core is `calendar` (the store of events), `media` and `audio` (the sensors), `notify`, `floats`, `stats`, `gpu`,
-  `settings`, and `plugins`, `pluginwasm`, `native` and `bundled` (the plugin host). The plugins written in Rust are
+  `settings`, and `plugins`, `pluginwasm`, `native` and `repo` (the plugin host, and the installer from GitHub). The plugins written in Rust are
   in `builtin/` (`games`, `work`, `pages`, `downloads`, `claude_code`, `now_playing`, `toasts`, `eyes`, `sound_light`, `system_meters`) with their
-  faces in `ui/plugins/` (the head's rows and widgets are `ui/head.js`, and `head.rs` keeps how you arranged them); the ones the app carries as plugins are in `plugins/` (`time`, `ics-calendar`) and
-  `src-tauri/plugins-bundled/`. What the island draws for any plugin is `ui/pluginui.js`; see [PLUGINS.md](PLUGINS.md).
+  faces in `ui/plugins/` (the head's rows and widgets are `ui/head.js`, and `head.rs` keeps how you arranged them); what modules bring (widgets and panes) is drawn by `ui/plugins/surface.js`. What the island draws for any plugin is `ui/pluginui.js`; see [PLUGINS.md](PLUGINS.md).
 - `scripts/gen_icons.py` regenerates `src-tauri/icons/` (standard library only).
 - Settings are stored in `%APPDATA%\NADI\settings.json`, and what each plugin has (on or off, its settings) in
   `%APPDATA%\NADI\plugins.json`.

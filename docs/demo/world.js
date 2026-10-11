@@ -726,6 +726,7 @@
   const isOn = (id) => (info(id)?.on ? !!info(id).on() : local[id] !== false);
   C.plugin_list = () => ({
     dnd: false,
+    moved: [],
     plugins: BUILT_IN.map((p) => ({
       id: p.id,
       name: p.name,
@@ -741,6 +742,7 @@
       cost: null,
       error: null,
       note: p.note ? p.note() : null,
+      widgets: p.id === "ics-calendar" ? [{ id: "date", name: "Date and time", place: "left", rank: 10, width: 118, interactive: true, start: null }] : [],
     })),
   });
   C.plugin_rescan = () => C.plugin_list();
@@ -749,6 +751,10 @@
     const p = info(id);
     if (p?.set) p.set(on);
     else local[id] = on;
+    if (id === "ics-calendar") {
+      if (!on) calUi.open = false;
+      calEmit(false);
+    }
     NADI.emit("plugins-changed", null);
   };
   // how the user arranged the head (the app keeps it in a file)
@@ -760,8 +766,86 @@
   C.plugin_mute = () => {};
   C.plugin_dnd = () => {};
   C.plugin_folder = () => {};
+  // ---- what the Calendar module draws outside its card (the real one is plugins/ics-calendar in nadi-plugins): the date
+  // in the head, and the month. The same blocks the host would send.
+  const calUi = { open: false, month: null, sel: null };
+  const MONTHS_LONG = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+  const dayKeyOf = (d) => d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
+  const calDay = (n) => new Date(n.getFullYear(), n.getMonth(), n.getDate());
+  function calOnDay(ev, day) {
+    const from = day.getTime();
+    const to = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1).getTime();
+    const last = ev.end_ms > ev.start_ms ? ev.end_ms - 1 : ev.start_ms;
+    return ev.start_ms < to && last >= from;
+  }
+  function calTime(ev, day) {
+    if (ev.all_day) return "All day";
+    const f = (ms) => new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    const from = day.getTime();
+    const to = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1).getTime();
+    if (ev.start_ms >= from && ev.end_ms <= to) return `${f(ev.start_ms)} – ${f(ev.end_ms)}`;
+    return ev.start_ms >= from ? `${f(ev.start_ms)} →` : `→ ${f(ev.end_ms)}`;
+  }
+  function calPane() {
+    const m = calUi.month;
+    const first = new Date(m.getFullYear(), m.getMonth(), 1);
+    const start = new Date(first.getFullYear(), first.getMonth(), 1 - first.getDay());
+    const today = dayKeyOf(new Date());
+    const cells = [];
+    for (let i = 0; i < 42; i++) {
+      const d = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
+      const k = dayKeyOf(d);
+      cells.push({ t: String(d.getDate()), id: `d:${k}`, state: k === dayKeyOf(calUi.sel) ? "sel" : k === today ? "today" : d.getMonth() !== m.getMonth() ? "other" : "", dots: Math.min(3, cal.filter((e) => calOnDay(e, d)).length) });
+    }
+    const blocks = [{ head: `${MONTHS_LONG[m.getMonth()]} ${m.getFullYear()}`, prev: "prev", next: "next", press: "today" }, { grid: { cols: 7, labels: ["S", "M", "T", "W", "T", "F", "S"], cells } }];
+    const day = calDay(calUi.sel);
+    const list = cal.filter((e) => calOnDay(e, day)).sort((a, b) => (b.all_day ? 1 : 0) - (a.all_day ? 1 : 0) || a.start_ms - b.start_ms);
+    if (list.length) {
+      blocks.push({ text: `${day.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" })} · ${list.length} ${list.length === 1 ? "event" : "events"}`, kind: "muted" });
+      blocks.push({ rows: list.map((e) => ({ title: e.summary, sub: "", time: calTime(e, day), past: e.end_ms < Date.now() && !e.all_day })), empty: "" });
+    }
+    return { title: "Calendar", blocks, open: false };
+  }
+  function calSurface(open) {
+    if (!isOn("ics-calendar")) return { widgets: {}, pane: null };
+    const next = cal.filter((e) => e.end_ms >= Date.now() - 3600e3)[0];
+    const tip = next ? [{ text: next.summary, kind: "title" }, { text: new Date(next.start_ms).toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }), kind: "muted" }] : [{ text: "Nothing coming up", kind: "muted" }];
+    const pane = calUi.open ? { ...calPane(), open: !!open } : null;
+    return { widgets: { date: { blocks: [{ clock: "time", h24: !!S().time_24h }, { clock: "date" }], tip } }, pane };
+  }
+  const calEmit = (open) => NADI.emit("plugin-surface", { plugin: "ics-calendar", ...calSurface(open) });
+  C.plugin_surface = () => (isOn("ics-calendar") ? { "ics-calendar": calSurface(false) } : {});
+  function calAct(kind, a) {
+    const today = calDay(new Date());
+    if (kind === "widget") {
+      if (calUi.open && a.pane_open !== false) {
+        calUi.open = false;
+        return calEmit(false);
+      }
+      calUi.open = true;
+      calUi.sel = today;
+      calUi.month = new Date(today.getFullYear(), today.getMonth(), 1);
+      return calEmit(true);
+    }
+    const id = a.id || "";
+    if (id === "prev" || id === "next") {
+      const d = id === "prev" ? -1 : 1;
+      calUi.month = new Date(calUi.month.getFullYear(), calUi.month.getMonth() + d, 1);
+      const last = new Date(calUi.month.getFullYear(), calUi.month.getMonth() + 1, 0).getDate();
+      calUi.sel = new Date(calUi.month.getFullYear(), calUi.month.getMonth(), Math.min(calUi.sel.getDate(), last));
+    } else if (id === "today") {
+      calUi.sel = today;
+      calUi.month = new Date(today.getFullYear(), today.getMonth(), 1);
+    } else if (id.startsWith("d:")) {
+      const k = Number(id.slice(2));
+      calUi.sel = new Date(Math.floor(k / 10000), Math.floor((k % 10000) / 100) - 1, k % 100);
+      calUi.month = new Date(calUi.sel.getFullYear(), calUi.sel.getMonth(), 1);
+    }
+    calEmit(false);
+  }
   C.plugin_call = ({ id, cmd, args }) => {
     const a = args || {};
+    if (id === "ics-calendar" && (cmd === "widget" || cmd === "pane")) return calAct(cmd, a);
     switch (`${id}.${cmd}`) {
       case "games.stats": return C.get_game_stats({ pids: a.pids });
       case "downloads.click": return C.download_item_click({ id: a.id });

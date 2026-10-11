@@ -232,14 +232,8 @@ struct Slot {
 }
 
 fn load_slot(p: &Arc<Plugin>) -> Result<Slot, String> {
-    let rt = match p.bundled.and_then(|b| b.module) {
-        // (a plugin the app carries: its module is in the app)
-        Some((_, bytes)) => Runtime::load(bytes, p.manifest.budget.call_ms, p.manifest.budget.memory_mb)?,
-        None => {
-            let bytes = std::fs::read(p.dir.join(&p.manifest.module)).map_err(|_| "The module file could not be read.".to_string())?;
-            Runtime::load(&bytes, p.manifest.budget.call_ms, p.manifest.budget.memory_mb)?
-        }
-    };
+    let bytes = std::fs::read(p.dir.join(&p.manifest.module)).map_err(|_| "The module file could not be read.".to_string())?;
+    let rt = Runtime::load(&bytes, p.manifest.budget.call_ms, p.manifest.budget.memory_mb)?;
     let long_ago = Instant::now() - Duration::from_secs(3600);
     Ok(Slot {
         id: Arc::as_ptr(p) as usize,
@@ -303,7 +297,10 @@ fn due_events(p: &Plugin, slot: &mut Slot, values: &Value, state: &IslandState) 
         if slot.cal_version != Some(v) {
             slot.cal_version = Some(v);
             let now = now_ms() as i64;
-            let events: Vec<_> = state.calendar.snapshot().events.into_iter().filter(|e| e.end_ms >= now - 3_600_000).take(CALENDAR_LISTED).collect();
+            // (a module that looks back, a month view, gets the days it asks for, up to 90, and more events)
+            let back = perms.calendar_past_days.min(90) as i64 * 86_400_000;
+            let limit = if back > 0 { CALENDAR_LISTED * 3 } else { CALENDAR_LISTED };
+            let events: Vec<_> = state.calendar.snapshot().events.into_iter().filter(|e| e.end_ms >= now - 3_600_000 - back).take(limit).collect();
             out.push((event("calendar", values, json!({ "events": events })), false));
         }
     }
@@ -512,17 +509,16 @@ mod tests {
         serde_json::from_value(v).unwrap()
     }
 
-    fn bundled(name: &str) -> Vec<u8> {
-        std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins-bundled").join(name)).unwrap()
-    }
-
-    /// An example's module, as `plugins/build.ps1` builds it (the examples are not carried by the app). `None` when it was
-    /// not built: the test then has nothing to run, and says so.
+    /// A plugin's module, as the nadi-plugins repository builds it (`build.ps1` there; the folder is next to this one, or
+    /// `NADI_PLUGINS` says where). `None` when it was not built: the test then has nothing to run, and says so.
     fn example(dir: &str, file: &str) -> Option<Vec<u8>> {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("plugins").join("dist").join(dir).join(file);
+        let root = std::env::var_os("NADI_PLUGINS")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("nadi-plugins"));
+        let path = root.join("dist").join(dir).join(file);
         let bytes = std::fs::read(&path).ok();
         if bytes.is_none() {
-            eprintln!("skipped: {} is not built (run plugins/build.ps1)", path.display());
+            eprintln!("skipped: {} is not built (run build.ps1 in nadi-plugins)", path.display());
         }
         bytes
     }
@@ -600,7 +596,8 @@ mod tests {
 
     #[test]
     fn the_time_plugin_says_the_hour_in_a_pill() {
-        let mut rt = Runtime::load(&bundled("time/time.wasm"), 4, 8).unwrap();
+        let Some(wasm) = example("time", "time.wasm") else { return };
+        let mut rt = Runtime::load(&wasm, 4, 8).unwrap();
         let ev = |kind: &str, now: u64, extra: Value| {
             let mut e = json!({ "event": kind, "now": now, "tz_offset": 0, "settings": { "every": 60, "h24": false } });
             e.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
@@ -626,7 +623,8 @@ mod tests {
 
     #[test]
     fn the_ics_calendar_plugin_lists_the_calendar_and_reminds_once() {
-        let mut rt = Runtime::load(&bundled("ics-calendar/ics-calendar.wasm"), 4, 8).unwrap();
+        let Some(wasm) = example("ics-calendar", "ics-calendar.wasm") else { return };
+        let mut rt = Runtime::load(&wasm, 4, 8).unwrap();
         let m = manifest(json!({ "id": "ics-calendar", "name": "ICS Calendar", "kind": "wasm" }));
         let now = 1_791_558_000_000u64;
         let events = json!([

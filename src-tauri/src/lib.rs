@@ -1,5 +1,4 @@
 mod browsers;
-mod bundled;
 mod audio;
 mod background;
 mod calendar;
@@ -1091,6 +1090,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             builtin::look::look_state,
             plugins::plugin_list,
+            plugins::plugin_surface,
+            plugins::plugin_moved_done,
             plugins::plugin_set,
             head::head_layout_get,
             head::head_layout_set,

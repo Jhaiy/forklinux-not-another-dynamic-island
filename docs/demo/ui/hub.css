@@ -950,7 +950,7 @@
 
 #pane-settings.hidden,
 #pane-info.hidden,
-#pane-calendar.hidden {
+#pane-plugin.hidden {
   display: none;
 }
 
@@ -1642,21 +1642,21 @@
   display: none;
 }
 
-/* ---- calendar pane (the Calendar plugin's page) ---- */
-#pane-calendar {
+/* ---- a plugin's pane, drawn from blocks (ui/surface.js); the month of the Calendar plugin is one ---- */
+#pane-plugin {
   display: flex;
   flex-direction: column;
   gap: 6px;
   padding-top: 4px;
 }
 
-#cal-head {
+.sf-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
 }
 
-#cal-head button {
+.sf-head button {
   border: 0;
   background: transparent;
   color: var(--fg-dim);
@@ -1665,8 +1665,8 @@
   transition: transform 0.4s var(--spring), color 0.2s ease;
 }
 
-#cal-prev,
-#cal-next {
+.sf-prev,
+.sf-next {
   width: 30px;
   height: 30px;
   display: grid;
@@ -1674,8 +1674,8 @@
   border-radius: 50%;
 }
 
-#cal-prev svg,
-#cal-next svg {
+.sf-prev svg,
+.sf-next svg {
   width: 14px;
   height: 14px;
   fill: none;
@@ -1685,16 +1685,16 @@
   stroke-linejoin: round;
 }
 
-#cal-head button:hover {
+.sf-head button:hover {
   color: var(--fg);
   transform: scale(1.15);
 }
 
-#cal-head button:active {
+.sf-head button:active {
   transform: scale(0.88);
 }
 
-#cal-title {
+.sf-title {
   padding: 4px 10px;
   font-size: 14px;
   font-weight: 600;
@@ -1702,13 +1702,13 @@
   color: var(--fg) !important;
 }
 
-#cal-week,
-#cal-grid {
+.sf-week,
+.sf-grid {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
 }
 
-#cal-week span {
+.sf-week span {
   padding: 4px 0 2px;
   text-align: center;
   font-size: 10px;
@@ -1718,15 +1718,15 @@
   color: var(--fg-mute);
 }
 
-#cal-grid {
+.sf-grid {
   gap: 2px 0;
 }
 
-#cal-grid.slide-next {
+.sf-grid.slide-next {
   animation: cal-slide-next 0.42s var(--spring);
 }
 
-#cal-grid.slide-prev {
+.sf-grid.slide-prev {
   animation: cal-slide-prev 0.42s var(--spring);
 }
 
@@ -1830,7 +1830,7 @@
   opacity: 0.8;
 }
 
-#cal-day-title {
+.sf-label {
   margin: 12px 4px 2px;
   font-size: 10px;
   font-weight: 600;
@@ -1839,11 +1839,11 @@
   color: var(--fg-mute);
 }
 
-#cal-status:empty {
+.sf-status:empty {
   display: none;
 }
 
-#cal-events {
+.sf-rows {
   display: contents;
 }
 
@@ -1931,7 +1931,7 @@
   text-align: right;
 }
 
-#cal-day-title:empty {
+.sf-label:empty {
   display: none;
 }
 
@@ -6034,5 +6034,98 @@ label.set-row {
   margin-top: 2px;
   font-size: 11px;
   font-weight: 400;
+  color: var(--fg-mute);
+}
+
+/* ---- what a module's blocks draw outside its card ---- */
+.sf-text {
+  font-size: 12.5px;
+  color: var(--fg-dim);
+}
+
+.sf-text.title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.sf-text.muted,
+.sf-text.small {
+  font-size: 11px;
+  color: var(--fg-mute);
+}
+
+.sf-text.warn {
+  color: #f0b48a;
+}
+
+.sf-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.hw-surface {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.hw-surface .sf-text {
+  font-size: 11px;
+}
+
+.hw-surface .sf-text.big {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.hw-surface .sf-bar {
+  display: block;
+  width: 60px;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+
+.hw-surface .sf-bar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent, #e9e9ee);
+}
+
+/* ---- the way to the plugin repository, above an empty list ---- */
+.pg-get {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  margin-bottom: 8px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.pg-get > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pg-get b {
+  font-size: 13px;
+  color: var(--fg);
+}
+
+.pg-get span {
+  font-size: 11px;
   color: var(--fg-mute);
 }

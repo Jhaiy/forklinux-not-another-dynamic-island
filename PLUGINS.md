@@ -15,15 +15,14 @@ There are three kinds:
 * **Module**: a WebAssembly file for a plugin that needs real logic (audio, games, files, the calendar, what is playing). The
   island calls it with what it may see; it answers with what the island is to do. It has **no network of its own**, only the
   sensors its manifest lists, a time budget for each call, and a memory cap. It is written in any language that makes
-  WebAssembly; there is a Rust SDK (`plugins/sdk`) and examples (`plugins/`).
+  WebAssembly; there is a Rust SDK and there are plugins to read in [nadi-plugins](https://github.com/Llyme/nadi-plugins).
 * **Native**: a plugin written in Rust inside the app, for what a sandbox must not hand out: the list of windows with their
   paths, performance counters, other programs' files and logins, the browser extension. See [The native plugins](#the-native-plugins).
 
-A declarative plugin and a module are the same to the island whether they sit in a folder or are carried by the app: the
-*Time* and *Calendar* plugins that come with it are two modules. Nothing in the
-host knows them by name. They go through the same checks, the same sandbox, the same list, the same switch and the same
-question before they are switched on as a plugin you drop in a folder. The difference is only that the app carries them (an
-update brings their new version) and that you can switch them off but not delete them.
+**The island starts as a blank slate.** Nothing ships inside it but the native plugins, and those are off until you switch them
+on. Declarative plugins and modules are folders, from [nadi-plugins](https://github.com/Llyme/nadi-plugins) (Settings > Plugins >
+`+`, or *Get plugins* on a fresh list) or from any repository or folder you point it at: *Time* and *Calendar* are two of them. The
+host knows none of them by name.
 
 ## What a plugin can do
 
@@ -57,8 +56,7 @@ update brings their new version) and that you can switch them off but not delete
 Settings > Plugins lists them, shows what each one asks to see, has the switches, each plugin's settings, a button to
 mute its banners, and **Do not disturb**. A plugin you drop in is **off** until you turn it on, and switching it on
 asks first. "Open the plugins folder" opens the folder; "Look again" reads it again. The app puts nothing in the
-folder: the examples (a weather card, an audio meter, a game clock, a busy meter) are in the repository, in `plugins/`, with their
-source, to read and to copy from. The plugins the app carries are in the same list, above the ones you install.
+folder: the plugins come from a repository (see below) or from you. The native plugins are in the same list, above the ones you install.
 
 ## What ships with the app
 
@@ -74,8 +72,6 @@ source, to read and to copy from. The plugins the app carries are in the same li
 | Sound light | native | an aura in the island that dances to what plays (with a most-brightness setting: 0 turns it off), and spills a little outside it | the sound levels |
 | Now playing | native | what is playing, with play, skip, seek, speed; a pill | what Windows says is playing |
 | Notification mirror | native | other apps' notifications on the island | Windows' notification access; Viber's popup |
-| Time | module | the time now and then, in a small pill (`plugins/time`) | the clock |
-| Calendar | module | brings the events of a calendar link to the island's calendar, a month view that the date in the head opens, the next ones on a card, and a banner shortly before one (`plugins/ics-calendar`) | the one address you give it; the island's calendar |
 
 Each of them can be switched off, and one that is off does nothing: no thread works, no file is read, nothing is asked of Windows
 and its card, its pill and its widgets are gone. **A new install starts blank**: every plugin is off, and the expanded island says
@@ -114,10 +110,10 @@ until you drop a widget there.
   placed already. Add a row, or Reset (which puts back only the widgets that start in the head). What you arranged is kept in
   `%APPDATA%\NADI\head.json`; a widget that starts, and that a plugin adds later, takes its own place, and one whose plugin is
   off is not drawn.
-* A widget may open a **page**: the date opens the month view in place of the cards, and pressing it again brings the cards back.
+* A widget may open a **page** (a *pane*): the date of the Calendar plugin opens the month view in place of the cards, and pressing it again brings the cards back.
 
 For a plugin written in Rust (a native one), a widget is `head.register({ id, plugin, name, place, rank, width, start, preview, build })` in its
-file in `ui/plugins/` (see `eyes.js`, `system-meters.js` and `calendar.js`): `start: false` keeps it in the tray until the user
+file in `ui/plugins/` (see `eyes.js` and `system-meters.js`): `start: false` keeps it in the tray until the user
 places it, and `preview()` gives the still picture its tile shows. A ring is `addRing(key, color, plugin, rank, start)`.
 A widget's tooltip is `host.setTip(el, content)`: a string is a headline with its note under it, and anything else is drawn as it is,
 an element or a function that makes one each time the tooltip shows (`tipRows(rows, { title, foot })` in `kit.js` makes a table
@@ -156,7 +152,7 @@ with `action == "modal"` and `args == { "button", "values", "closed" }`. It has 
 `field`, `choice`, `list` and `progress`; the island puts the plugin's name on the bar, so a plugin cannot pass for the island or for
 another plugin, and a plugin that is switched off loses its modal. A modal asks for no permission: it only shows words and takes
 answers. In Rust: `Reply::modal(Modal::new("Snooze").text("For how long?").choice(...).primary("snooze", "Snooze"))` (see
-`plugins/busy-meter`).
+`busy-meter` in nadi-plugins).
 
 **A face** (a native plugin's file in `ui/plugins/`) uses `openModal(spec, onResult)` and `askModal(spec)` from `kit.js`; the blocks
 are the same, and `checks` too (rows with a tickbox, a tile, badges and a note: the list of plugins in a repository is one).
@@ -416,9 +412,21 @@ import nothing. The event and the answer are JSON.
 * `quiet` asks the other plugins to hold their peace while something fills the screen; `ambient` banners and pills wait for it.
 * `media` presses a button of the player (the plugin must have `media_control`).
 
-With the Rust SDK this is `fn handle(ev: &Event) -> Reply` and `plugin!(handle);` (see `plugins/time`, `plugins/ics-calendar`,
-`plugins/busy-meter`). A module is a function from an event to a reply, so its logic is tested as an ordinary Rust test. Build with
-`plugins/build.ps1` (needs `rustup target add wasm32-unknown-unknown`).
+* `widgets` draws the widgets its manifest lists, and `pane` a page. A widget is listed in the manifest
+  (`"widgets": [{ "id", "name", "place", "rank", "width", "interactive", "start" }]`) and answered with
+  `"widgets": { "<id>": { "blocks": [...], "tip": [...] } }`; it is in the tray of edit mode like any widget, and in the head
+  from the start unless `"start": false`. A pane is `"pane": { "title", "blocks": [...], "open": true }` (`open` brings it up
+  now; `"pane": null` takes it away and the cards are back). Both are made of blocks the island draws: `text` (`kind`: title,
+  big, small, muted, note, warn), `clock` (`"time"` or `"date"`: the island keeps it ticking, so it costs no call), `bar`,
+  `head` (a title with `prev` and `next` buttons and a `press` id), `grid` (up to seven columns: the Calendar's month; its `cells`
+  carry `t`, `id`, `state`, `dots`), `rows` (title, sub, time, past) and `buttons` (up to four). A press comes back as an
+  `action` event: `action == "widget"` with `args == { "id", "pane_open" }`, or `action == "pane"` with `args == { "id" }`. They go
+  with the plugin when it is switched off. A module that wants a month view of the calendar asks for `"calendar_past_days"`
+  (up to 90) in its permissions to be told of the events that are over, too.
+
+With the Rust SDK this is `fn handle(ev: &Event) -> Reply` and `plugin!(handle);` (see `time`, `ics-calendar` and `busy-meter` in
+[nadi-plugins](https://github.com/Llyme/nadi-plugins)). A module is a function from an event to a reply, so its logic is tested as an
+ordinary Rust test. Build with `build.ps1` there (needs `rustup target add wasm32-unknown-unknown`).
 
 What the host does: calls it from one low-priority thread, one event at a time; a call is cut off when it has used its
 fuel (the budget); a module that fails five calls in a row is switched off; a banner it says is held to one every few
@@ -428,7 +436,7 @@ buttons at 6 on a card and 3 on a pill; a picture must be a `data:` raster of 20
 ## The native plugins
 
 A native plugin is a Rust file in `src-tauri/src/builtin` with its manifest beside it, a line in `builtin/mod.rs`, and, if it
-draws anything its own, a file in `ui/plugins` (listed in `ui/plugins/index.js`). It goes through the same host as the others
+draws anything its own, a file in `ui/plugins` (listed in `ui/plugins/index.js`; `surface.js` there draws what modules bring: widgets and panes). It goes through the same host as the others
 (the same list, switch, question, settings, mute and Do not disturb), and may do more because it is Rust: it runs
 its own threads and reads what a sandbox must not hand out. It reaches the screen the same way, too: a card (rich ones
 are drawn by its own file in `ui/plugins`, plain ones are the blocks above), `ctx.offer_pill` for a pill it declared in

@@ -126,3 +126,56 @@ export function addFromGitHub({ prefill = "", tint, onChange }) {
 	});
 	return () => steps?.close();
 }
+
+/**
+ * The plugins that used to come inside the app (Time, Calendar) and were on: ask once to fetch them from the repository.
+ * `moved`: [[id, name]]. Skipping lets them go; installing switches them on again, with the settings they had.
+ */
+export function askMoved({ moved, tint, onChange }) {
+	const repo = "Llyme/nadi-plugins";
+	const spec = (error = null, busy = null) => ({
+		id: "plugins-moved",
+		remember: "plugins-moved",
+		width: 400,
+		title: "Plugins moved",
+		icon: { letter: "↓" },
+		blocks: [
+			{ text: `${moved.map(([, n]) => n).join(" and ")} now ${moved.length === 1 ? "comes" : "come"} from ${repo}.` },
+			...(error ? [{ text: error, kind: "warn" }] : []),
+			{
+				checks: "pick",
+				items: moved.map(([id, name]) => ({ id, label: name, sub: "Keeps your settings", letter: name.charAt(0), color: tint(id), checked: true })),
+			},
+		],
+		busy,
+		buttons: [
+			{ id: "skip", label: "Skip" },
+			{ id: "install", label: "Install and switch on", primary: true, stay: true },
+		],
+	});
+	let finished = false;
+	const finish = (install) => {
+		if (finished) return;
+		finished = true;
+		invoke("plugin_moved_done", { install }).catch(() => {});
+		onChange?.();
+	};
+	openModal(spec(), async (button, values, api, closed) => {
+		if (button === "install") {
+			const ids = values.pick || [];
+			api.update(spec(null, "Installing…"));
+			try {
+				const found = await invoke("repo_look", { link: repo });
+				const usable = (ids.length ? ids : moved.map(([id]) => id)).filter((id) => found.plugins.some((p) => p.id === id && !p.problem));
+				const done = await invoke("repo_install", { token: found.token, ids: usable });
+				for (const id of done) await invoke("plugin_set", { id, on: true });
+				finish(true);
+				api.close();
+			} catch (e) {
+				api.update(spec(String(e)));
+			}
+			return;
+		}
+		if (closed || button === "skip") finish(false);
+	});
+}

@@ -266,36 +266,11 @@ impl Host {
                 .map(|e| (e.native.clone(), e.plugin.manifest.id.clone(), e.plugin.manifest.default_on))
                 .collect()
         };
-        // (the plugins the app carries that are not in Rust, the same way)
-        let carried: Vec<(String, bool)> = {
-            let saved = self.saved.lock().unwrap();
-            self.plugins
-                .lock()
-                .unwrap()
-                .iter()
-                .filter(|p| p.bundled.is_some() && !saved.adopted.contains(&p.manifest.id))
-                .map(|p| (p.manifest.id.clone(), p.manifest.default_on))
-                .collect()
-        };
-        if todo.is_empty() && carried.is_empty() {
+        if todo.is_empty() {
             return;
         }
         {
             let mut saved = self.saved.lock().unwrap();
-            for (id, default_on) in carried {
-                let a = crate::bundled::adopt(&id, old, default_on);
-                saved.on.retain(|x| *x != id);
-                if a.on {
-                    saved.on.push(id.clone());
-                }
-                if !a.values.is_empty() {
-                    let slot = saved.values.entry(id.clone()).or_default();
-                    for (k, v) in a.values {
-                        slot.insert(k, v);
-                    }
-                }
-                saved.adopted.push(id);
-            }
             for (native, id, default_on) in todo {
                 let a = native.adopt(old, default_on);
                 saved.on.retain(|x| *x != id);

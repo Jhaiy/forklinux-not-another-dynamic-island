@@ -1,6 +1,6 @@
 //! The plugins written in Rust, inside the app (see native.rs). Each is a file here with its manifest beside it; this list
-//! is the only place the core knows them, and the order they have in Settings > Plugins. (The plugins that are a module or
-//! a declarative plugin, and that the app only carries, are in bundled.rs.)
+//! is the only place the core knows them, and the order they have in Settings > Plugins. (Every other plugin, a module or a
+//! declarative plugin, comes from a folder: see plugins.rs and repo.rs.)
 
 use crate::native::Native;
 use std::sync::Arc;

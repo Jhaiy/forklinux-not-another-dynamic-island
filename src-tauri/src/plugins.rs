@@ -11,7 +11,6 @@
 //! are open, a file that changed, a button that was pressed) and that answers with what the island is to do (`Out`: a
 //! card, a pill, rings, banners, events for the calendar); it is run by `pluginwasm.rs`, has no network, and is cut off
 //! when it is slow. A third kind, a native plugin (native.rs), is Rust inside the app; it reaches the screen the same way.
-//! Some plugins are carried by the app (bundled.rs) and are read from what is embedded; they are plugins like the rest.
 //!
 //! Where they live: `%APPDATA%\NADI\plugins\<id>\manifest.json`. What is switched on, each plugin's settings, who
 //! is muted and do not disturb are kept in `%APPDATA%\NADI\plugins.json`. A plugin that was just dropped in is off
@@ -84,6 +83,33 @@ pub struct Manifest {
     /// a declarative plugin: settings that must be filled in before it asks anything, and what to say until then
     pub needs: Vec<String>,
     pub setup: String,
+    /// a module plugin: widgets for the head (what they show comes in its replies)
+    pub widgets: Vec<WidgetSpec>,
+}
+
+/// A widget a module offers for the head (see `Reply::widget` in the SDK): the island lists it in the tray of edit mode and
+/// draws what the module sends for it, as blocks.
+#[derive(Deserialize, Serialize, Clone, Default, Debug)]
+#[serde(default)]
+pub struct WidgetSpec {
+    pub id: String,
+    pub name: String,
+    /// "left", "center" or "right"
+    pub place: String,
+    pub rank: i32,
+    /// logical px
+    pub width: f64,
+    /// it can be pressed: the module is told by an `action` event, `action == "widget"`, `args == { "id" }`
+    pub interactive: bool,
+    /// it is in the head as soon as the plugin is on (false: only from the tray)
+    pub start: Option<bool>,
+}
+
+/// What a module has drawn outside its card: one set of blocks for each of its widgets, and a pane.
+#[derive(Default, Clone, PartialEq)]
+pub struct Surface {
+    pub widgets: serde_json::Map<String, Value>,
+    pub pane: Option<Value>,
 }
 
 /// The pill of a declarative plugin: shown while `when` is true (any text but "", "0" and "false").
@@ -185,6 +211,8 @@ pub struct Permissions {
     pub files: Vec<String>,
     /// a module may read the events of the island's calendar (whoever brought them)
     pub calendar: bool,
+    /// ... and the events that ended this many days ago, too (a month view looks back; 0 is the ones not over yet)
+    pub calendar_past_days: u32,
     /// a module may see what is playing (title, artist, position; never the picture)
     pub media: bool,
     /// ... and press play, pause, next and previous for it
@@ -966,11 +994,10 @@ pub struct Plugin {
     pub dir: PathBuf,
     /// why it cannot run (a manifest that is wrong, a module that is missing)
     pub problem: Option<String>,
-    /// it ships inside the app (see bundled.rs): the same kind of plugin as one in a folder, only not in one
-    pub bundled: Option<&'static crate::bundled::Bundled>,
     card: Mutex<Option<CardOut>>,
     pill: Mutex<Option<PillOut>>,
     rings: Mutex<Vec<RingOut>>,
+    surface: Mutex<Surface>,
     error: Mutex<Option<String>>,
     /// a line about how it is doing (a declarative plugin's `status`)
     note: Mutex<Option<String>>,
@@ -999,18 +1026,20 @@ pub(crate) struct Saved {
     pub(crate) values: HashMap<String, HashMap<String, Value>>,
     /// the native plugins that took over what the old settings said about them (once each)
     pub(crate) adopted: Vec<String>,
+    /// the question about the plugins that moved out of the app (Time, Calendar) was answered
+    pub(crate) moved_asked: bool,
 }
 
 impl Plugin {
-    pub(crate) fn new(manifest: Manifest, dir: PathBuf, problem: Option<String>, bundled: Option<&'static crate::bundled::Bundled>) -> Plugin {
+    pub(crate) fn new(manifest: Manifest, dir: PathBuf, problem: Option<String>) -> Plugin {
         Plugin {
             manifest,
             dir,
             problem,
-            bundled,
             card: Mutex::new(None),
             pill: Mutex::new(None),
             rings: Mutex::new(Vec::new()),
+            surface: Mutex::new(Surface::default()),
             error: Mutex::new(None),
             note: Mutex::new(None),
             due: Mutex::new(Instant::now()),
@@ -1027,7 +1056,7 @@ impl Plugin {
 
     /// A plugin that is part of the app, written in Rust (see native.rs): no folder, nothing to check.
     pub(crate) fn built_in(manifest: Manifest) -> Plugin {
-        Plugin::new(manifest, PathBuf::new(), None, None)
+        Plugin::new(manifest, PathBuf::new(), None)
     }
 
     pub fn card_slot(&self) -> std::sync::MutexGuard<'_, Option<CardOut>> {
@@ -1158,7 +1187,7 @@ pub struct Info {
     pub actions: Vec<ActionSpec2>,
     /// it can say things in banners: the mute button has something to do
     pub banners: bool,
-    /// it ships inside the app (written in Rust, or a plugin like any other that the app carries)
+    /// it is part of the app (written in Rust)
     pub bundled: bool,
     /// what the module costs when it runs ("0.4 ms a call")
     pub cost: Option<String>,
@@ -1167,13 +1196,20 @@ pub struct Info {
     pub note: Option<String>,
     /// the repository it was installed from, and the version of it ("Llyme/nadi-plugins v1.2.0": see `repo.rs`)
     pub from: Option<String>,
+    /// the widgets it offers for the head
+    pub widgets: Vec<WidgetSpec>,
 }
 
 #[derive(Serialize)]
 pub struct Listing {
     pub plugins: Vec<Info>,
     pub dnd: bool,
+    /// plugins that were on when the app still carried them, and are not here now: (id, name)
+    pub moved: Vec<(String, String)>,
 }
+
+/// The plugins the app used to carry inside it, and now come from the repository.
+pub const MOVED: [(&str, &str); 2] = [("ics-calendar", "Calendar"), ("time", "Time")];
 
 pub(crate) fn dir() -> Option<PathBuf> {
     Some(crate::settings::data_dir()?.join("plugins"))
@@ -1213,7 +1249,7 @@ fn with_settings(mut ctx: Value, values: &Value) -> Value {
     }
 }
 
-fn check(m: &Manifest, dir: &std::path::Path, bundled: bool) -> Option<String> {
+fn check(m: &Manifest, dir: &std::path::Path) -> Option<String> {
     if !valid_id(&m.id) {
         return Some("The id must be lower case letters, digits, '.', '-' or '_'.".into());
     }
@@ -1234,7 +1270,7 @@ fn check(m: &Manifest, dir: &std::path::Path, bundled: bool) -> Option<String> {
             if f.is_empty() || f.contains(['/', '\\']) || !f.ends_with(".wasm") {
                 return Some("A module plugin names its file (\"module\": \"name.wasm\"), in its own folder.".into());
             }
-            if !bundled && !dir.join(f).is_file() {
+            if !dir.join(f).is_file() {
                 return Some(format!("The module {f} is not in the folder."));
             }
             if m.permissions.media_control && !m.permissions.media {
@@ -1338,24 +1374,12 @@ fn read_one(path: &std::path::Path) -> Option<Plugin> {
             if m.id.is_empty() {
                 m.id = fallback;
             }
-            let p = check(&m, folder, false);
+            let p = check(&m, folder);
             (m, p)
         }
         Err(e) => (Manifest { id: fallback.clone(), name: fallback, ..Default::default() }, Some(format!("The manifest is not valid: {e}."))),
     };
-    Some(Plugin::new(manifest, folder.to_path_buf(), problem, None))
-}
-
-/// A plugin that ships inside the app: read from what is embedded, checked like any other.
-fn read_bundled(b: &'static crate::bundled::Bundled) -> Plugin {
-    match serde_json::from_str::<Manifest>(b.manifest) {
-        Ok(mut m) => {
-            m.id = b.id.to_string();
-            let p = check(&m, std::path::Path::new(""), true);
-            Plugin::new(m, PathBuf::new(), p, Some(b))
-        }
-        Err(e) => Plugin::new(Manifest { id: b.id.to_string(), name: b.id.to_string(), ..Default::default() }, PathBuf::new(), Some(format!("The manifest is not valid: {e}.")), Some(b)),
-    }
+    Some(Plugin::new(manifest, folder.to_path_buf(), problem))
 }
 
 impl Host {
@@ -1372,11 +1396,8 @@ impl Host {
                 }
             }
         }
-        // (the plugins that are part of the app come first: the ones written in Rust, then the ones inside the exe)
+        // (the plugins that are part of the app come first: the ones written in Rust)
         let mut all: Vec<Arc<Plugin>> = self.natives.lock().unwrap().iter().map(|e| e.plugin.clone()).collect();
-        for b in crate::bundled::ALL {
-            all.push(Arc::new(read_bundled(b)));
-        }
         let mut found: Vec<Arc<Plugin>> = Vec::new();
         if let Ok(rd) = std::fs::read_dir(&root) {
             for e in rd.flatten() {
@@ -1399,6 +1420,7 @@ impl Host {
                         *p.card.lock().unwrap() = o.card.lock().unwrap().clone();
                         *p.pill.lock().unwrap() = o.pill.lock().unwrap().clone();
                         *p.rings.lock().unwrap() = o.rings.lock().unwrap().clone();
+                        *p.surface.lock().unwrap() = o.surface.lock().unwrap().clone();
                         *p.note.lock().unwrap() = o.note.lock().unwrap().clone();
                     }
                 }
@@ -1513,6 +1535,29 @@ impl Host {
         self.plugins.lock().unwrap().iter().filter(|p| self.is_on(p) && p.manifest.kind == "wasm").cloned().collect()
     }
 
+    /// What the plugins that are on have drawn outside their cards (widgets and panes), for a page that has just opened.
+    pub fn surfaces(&self) -> Value {
+        let all = self.plugins.lock().unwrap().clone();
+        let mut out = serde_json::Map::new();
+        for p in all.iter().filter(|p| self.is_on(p)) {
+            let s = p.surface.lock().unwrap().clone();
+            if !s.widgets.is_empty() || s.pane.is_some() {
+                out.insert(p.manifest.id.clone(), json!({ "widgets": s.widgets, "pane": s.pane }));
+            }
+        }
+        Value::Object(out)
+    }
+
+    /// A plugin that was switched off draws nothing: its widgets and pane are taken away.
+    pub fn clear_surface(&self, app: &AppHandle, id: &str) {
+        if let Some(p) = self.plugin(id) {
+            if *p.surface.lock().unwrap() != Surface::default() {
+                *p.surface.lock().unwrap() = Surface::default();
+                let _ = app.emit("plugin-surface", json!({ "plugin": id, "widgets": {}, "pane": null, "open": false }));
+            }
+        }
+    }
+
     pub fn listing(&self) -> Listing {
         let saved = self.saved.lock().unwrap().clone();
         // (a copy of the list: the notes ask the host about the plugins, which must not find the list locked)
@@ -1551,15 +1596,21 @@ impl Host {
                         .collect(),
                     actions: m.actions.iter().map(|a| ActionSpec2 { id: a.id.clone(), label: a.label.clone(), ask: a.ask.clone(), then: a.then.clone(), filled: !a.ask.is_empty() && self.filled_of(&m.id, &a.id) }).collect(),
                     banners: m.banners || m.kind == "wasm" || m.attention.is_some(),
-                    bundled: p.bundled.is_some() || m.kind == "native",
+                    bundled: m.kind == "native",
                     cost,
                     error: p.problem.clone().or_else(|| p.error.lock().unwrap().clone()),
                     note: if saved.on.contains(&m.id) { self.note_of(&m.id).or_else(|| p.note.lock().unwrap().clone()) } else { None },
-                    from: if p.bundled.is_some() || m.kind == "native" { None } else { crate::repo::source_of(&p.dir) },
+                    from: if m.kind == "native" { None } else { crate::repo::source_of(&p.dir) },
+                    widgets: m.widgets.clone(),
                 }
             })
             .collect();
-        Listing { plugins, dnd: saved.dnd }
+        let moved = if saved.moved_asked {
+            Vec::new()
+        } else {
+            MOVED.iter().filter(|(id, _)| saved.on.iter().any(|x| x == id) && !all.iter().any(|p| p.manifest.id == *id)).map(|(id, name)| (id.to_string(), name.to_string())).collect()
+        };
+        Listing { plugins, dnd: saved.dnd, moved }
     }
 
     /// The cards of the plugins that are on, in the list's order.
@@ -1633,6 +1684,23 @@ impl Host {
         }
         if let Some(modal) = out.modal {
             crate::modal::from_plugin(app, &p.manifest.id, &p.manifest.name, modal);
+        }
+        if out.widgets.is_some() || out.pane.is_some() {
+            let (mut widgets, mut pane) = { let s = p.surface.lock().unwrap(); (s.widgets.clone(), s.pane.clone()) };
+            if let Some(w) = out.widgets {
+                for (k, v) in w {
+                    widgets.insert(k, v);
+                }
+            }
+            let open = out.pane.as_ref().and_then(|x| x.as_ref()).and_then(|x| x.get("open")).and_then(|x| x.as_bool()).unwrap_or(false);
+            if let Some(next) = out.pane {
+                pane = next;
+            }
+            let now = Surface { widgets, pane };
+            if *p.surface.lock().unwrap() != now || open {
+                *p.surface.lock().unwrap() = now.clone();
+                let _ = app.emit("plugin-surface", json!({ "plugin": id, "widgets": now.widgets, "pane": now.pane, "open": open }));
+            }
         }
         if let Some(rings) = out.rings {
             if *p.rings.lock().unwrap() != rings {
@@ -1813,6 +1881,10 @@ pub struct Out {
     pub media: Option<(String, String)>,
     /// a window for the plugin (see `modal.rs`): `Some(Null)` closes the one it has open
     pub modal: Option<Value>,
+    /// what its widgets show now, by widget id (only the ones its manifest lists)
+    pub widgets: Option<serde_json::Map<String, Value>>,
+    /// its pane (a view that replaces the cards): `Some(None)` takes it away
+    pub pane: Option<Option<Value>>,
 }
 
 /// the name the page gives a plugin's pill (`#pg-<id>`)
@@ -1866,10 +1938,73 @@ pub fn out_of(m: &Manifest, reply: &Value) -> Out {
     if let Some(md) = o.get("modal") {
         out.modal = if md.is_null() { Some(Value::Null) } else { clean_modal(md) };
     }
+    if let Some(w) = o.get("widgets").and_then(|w| w.as_object()) {
+        let mut map = serde_json::Map::new();
+        for (k, v) in w.iter().take(8) {
+            if m.widgets.iter().any(|s| &s.id == k) {
+                map.insert(k.clone(), json!({ "blocks": clean_blocks(v.get("blocks")), "tip": clean_blocks(v.get("tip")) }));
+            }
+        }
+        out.widgets = Some(map);
+    }
+    if let Some(pane) = o.get("pane") {
+        out.pane = Some(pane.as_object().map(|p| {
+            let t = |k: &str, n: usize| p.get(k).and_then(|v| v.as_str()).unwrap_or("").chars().take(n).collect::<String>();
+            json!({ "title": t("title", 60), "blocks": clean_blocks(p.get("blocks")), "open": p.get("open").and_then(|b| b.as_bool()).unwrap_or(false) })
+        }));
+    }
     out.wake_ms = o.get("wake_ms").and_then(|v| v.as_u64()).map(|n| n.clamp(50, MAX_WAKE_MS));
     if let Some(mc) = o.get("media").and_then(|v| v.as_object()) {
         let s = |k: &str| mc.get(k).and_then(|v| v.as_str()).unwrap_or("").chars().take(200).collect::<String>();
         out.media = Some((s("action"), s("source")));
+    }
+    out
+}
+
+/// The blocks of a widget, its tip and a pane, kept to what the island draws: short texts, a few rows, ids a press can name.
+/// A block is one of `text`, `clock`, `bar`, `head`, `grid`, `rows` and `buttons`; any other is left out.
+pub fn clean_blocks(v: Option<&Value>) -> Vec<Value> {
+    let s = |x: Option<&Value>, n: usize| x.and_then(|v| v.as_str()).unwrap_or("").chars().take(n).collect::<String>();
+    let flag = |x: Option<&Value>| x.and_then(|v| v.as_bool()).unwrap_or(false);
+    let one_of = |x: String, list: &[&str]| if list.contains(&x.as_str()) { x } else { String::new() };
+    let mut out = Vec::new();
+    for b in v.and_then(|b| b.as_array()).map(|a| &a[..a.len().min(24)]).unwrap_or(&[]) {
+        let Some(b) = b.as_object() else { continue };
+        let one = if b.contains_key("text") {
+            json!({ "text": s(b.get("text"), 400), "kind": one_of(s(b.get("kind"), 8), &["title", "big", "small", "muted", "note", "warn"]) })
+        } else if b.contains_key("clock") {
+            json!({ "clock": one_of(s(b.get("clock"), 8), &["time", "date"]), "h24": flag(b.get("h24")) })
+        } else if b.contains_key("bar") {
+            json!({ "bar": b.get("bar").and_then(|p| p.as_f64()).unwrap_or(0.0).clamp(0.0, 1.0), "text": s(b.get("text"), 40) })
+        } else if b.contains_key("head") {
+            json!({ "head": s(b.get("head"), 60), "prev": s(b.get("prev"), 40), "next": s(b.get("next"), 40), "press": s(b.get("press"), 40) })
+        } else if let Some(g) = b.get("grid").and_then(|g| g.as_object()) {
+            let cells: Vec<Value> = g
+                .get("cells")
+                .and_then(|c| c.as_array())
+                .map(|a| {
+                    a.iter()
+                        .take(49)
+                        .map(|c| json!({ "t": s(c.get("t"), 6), "id": s(c.get("id"), 40), "state": one_of(s(c.get("state"), 6), &["today", "sel", "other"]), "sel": flag(c.get("sel")), "dots": c.get("dots").and_then(|d| d.as_u64()).unwrap_or(0).min(3) }))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let labels: Vec<Value> = g.get("labels").and_then(|l| l.as_array()).map(|a| a.iter().take(7).map(|l| json!(s(Some(l), 6))).collect()).unwrap_or_default();
+            json!({ "grid": { "cols": g.get("cols").and_then(|c| c.as_u64()).unwrap_or(7).clamp(1, 7), "labels": labels, "cells": cells } })
+        } else if b.contains_key("rows") {
+            let rows: Vec<Value> = b
+                .get("rows")
+                .and_then(|r| r.as_array())
+                .map(|a| a.iter().take(30).map(|r| json!({ "title": s(r.get("title"), 120), "sub": s(r.get("sub"), 120), "time": s(r.get("time"), 40), "past": flag(r.get("past")) })).collect())
+                .unwrap_or_default();
+            json!({ "rows": rows, "empty": s(b.get("empty"), 200) })
+        } else if b.contains_key("buttons") {
+            let items: Vec<Value> = b.get("buttons").and_then(|r| r.as_array()).map(|a| a.iter().take(4).map(|x| json!({ "id": s(x.get("id"), 40), "label": s(x.get("label"), 30) })).collect()).unwrap_or_default();
+            json!({ "buttons": items })
+        } else {
+            continue;
+        };
+        out.push(one);
     }
     out
 }
@@ -2057,6 +2192,29 @@ pub fn plugin_list(window: tauri::WebviewWindow) -> Listing {
     window.state::<Arc<IslandState>>().plugins.listing()
 }
 
+/// The question about the plugins that moved out of the app was answered. Not installed: what was on is let go (a plugin
+/// installed later asks its own question, as any other).
+#[tauri::command]
+pub fn plugin_moved_done(window: tauri::WebviewWindow, install: bool) {
+    use tauri::Manager;
+    let state = window.state::<Arc<IslandState>>();
+    {
+        let mut s = state.plugins.saved.lock().unwrap();
+        s.moved_asked = true;
+        if !install {
+            s.on.retain(|x| !MOVED.iter().any(|(id, _)| id == x));
+        }
+    }
+    state.plugins.save();
+}
+
+/// What the plugins' widgets and panes show now.
+#[tauri::command]
+pub fn plugin_surface(window: tauri::WebviewWindow) -> Value {
+    use tauri::Manager;
+    window.state::<Arc<IslandState>>().plugins.surfaces()
+}
+
 #[tauri::command]
 pub fn plugin_set(window: tauri::WebviewWindow, id: String, on: bool) {
     use tauri::Manager;
@@ -2066,6 +2224,7 @@ pub fn plugin_set(window: tauri::WebviewWindow, id: String, on: bool) {
     // (a plugin that is switched off has no window open)
     if !on {
         crate::modal::from_plugin(window.app_handle(), &id, "", Value::Null);
+        state.plugins.clear_surface(window.app_handle(), &id);
     }
     // (the head's widgets are the plugins' that are on: it lays itself out again)
     let _ = tauri::Emitter::emit(&window, "plugins-changed", ());
@@ -2110,6 +2269,46 @@ pub fn plugin_folder() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_modules_widgets_and_pane_are_kept_to_the_blocks_the_island_draws() {
+        let m = Manifest { id: "x".into(), name: "X".into(), kind: "wasm".into(), widgets: vec![WidgetSpec { id: "date".into(), name: "Date".into(), ..Default::default() }], ..Default::default() };
+        let reply = json!({
+            "widgets": {
+                "date": { "blocks": [{ "clock": "time", "h24": true }, { "clock": "date" }, { "html": "<b>no</b>" }, { "text": "hi", "kind": "weird" }], "tip": [{ "text": "next" }] },
+                "other": { "blocks": [{ "text": "not in the manifest" }] }
+            },
+            "pane": {
+                "title": "Calendar", "open": true,
+                "blocks": [
+                    { "head": "October 2026", "prev": "prev", "next": "next", "press": "today" },
+                    { "grid": { "cols": 99, "labels": ["S", "M"], "cells": [{ "t": "14", "id": "d:1", "state": "today", "dots": 9 }, { "t": "15", "state": "evil" }] } },
+                    { "rows": [{ "title": "Standup", "time": "10:00 AM", "past": true }], "empty": "" },
+                    { "buttons": [{ "id": "a", "label": "A" }, { "id": "b", "label": "B" }, { "id": "c", "label": "C" }, { "id": "d", "label": "D" }, { "id": "e", "label": "E" }] }
+                ]
+            }
+        });
+        let out = out_of(&m, &reply);
+        let w = out.widgets.expect("widgets");
+        assert!(w.contains_key("date") && !w.contains_key("other"), "only the widgets its manifest lists");
+        let blocks = w["date"]["blocks"].as_array().unwrap();
+        assert_eq!(blocks.len(), 3, "a block the island does not draw is left out");
+        assert_eq!((blocks[0]["clock"].as_str(), blocks[0]["h24"].as_bool()), (Some("time"), Some(true)));
+        assert_eq!(blocks[2]["kind"], "", "a kind that is not one of the island's is dropped");
+        assert_eq!(w["date"]["tip"][0]["text"], "next");
+        let pane = out.pane.unwrap().unwrap();
+        assert_eq!((pane["title"].as_str(), pane["open"].as_bool()), (Some("Calendar"), Some(true)));
+        let b = pane["blocks"].as_array().unwrap();
+        assert_eq!(b[0]["prev"], "prev");
+        assert_eq!(b[1]["grid"]["cols"], 7);
+        assert_eq!(b[1]["grid"]["cells"][0]["dots"], 3);
+        assert_eq!(b[1]["grid"]["cells"][1]["state"], "");
+        assert_eq!(b[2]["rows"][0]["past"], true);
+        assert_eq!(b[3]["buttons"].as_array().unwrap().len(), 4);
+        // null takes the pane away; nothing said, nothing done
+        assert_eq!(out_of(&m, &json!({ "pane": null })).pane, Some(None));
+        assert!(out_of(&m, &json!({})).pane.is_none() && out_of(&m, &json!({})).widgets.is_none());
+    }
 
     #[test]
     fn a_modules_modal_is_kept_to_what_the_island_draws() {
@@ -2257,20 +2456,20 @@ mod tests {
         let m = |v: Value| serde_json::from_value::<Manifest>(v).unwrap();
         let ok = json!({ "id": "a-b", "name": "A", "permissions": { "net": ["x.com"] }, "source": { "http": "https://x.com/a" } });
         let here = std::path::Path::new(".");
-        assert!(check(&m(ok.clone()), here, false).is_none());
+        assert!(check(&m(ok.clone()), here).is_none());
         let mut bad = ok.clone();
         bad["id"] = json!("Bad Id!");
-        assert!(check(&m(bad), here, false).is_some());
+        assert!(check(&m(bad), here).is_some());
         let mut wasm = ok.clone();
         wasm["kind"] = json!("wasm");
-        assert!(check(&m(wasm), here, false).unwrap().contains("names its file"));
+        assert!(check(&m(wasm), here).unwrap().contains("names its file"));
         let mut far = ok.clone();
         far["source"]["http"] = json!("https://y.com/a");
-        assert!(check(&m(far), here, false).unwrap().contains("not on the list"));
+        assert!(check(&m(far), here).unwrap().contains("not on the list"));
         // a declarative plugin cannot listen to the PC
         let mut ears = ok;
         ears["permissions"]["audio"] = json!(true);
-        assert!(check(&m(ears), here, false).unwrap().contains("Only a module"));
+        assert!(check(&m(ears), here).unwrap().contains("Only a module"));
     }
 
     fn manifest_of_json(v: Value) -> Manifest {
@@ -2372,15 +2571,27 @@ mod tests {
         assert!(truthy("yes") && !truthy("0") && !truthy(" false ") && !truthy(""));
     }
 
+    /// `check`, with a folder that holds the module file
+    fn check_manifest(m: &Manifest) -> Option<String> {
+        let dir = std::env::temp_dir().join(format!("nadi-check-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(&m.module), b"\0asm").unwrap();
+        check(m, &dir)
+    }
+
     #[test]
-    fn the_ics_calendar_that_ships_with_the_app_is_a_plugin_like_any_other() {
-        let b = crate::bundled::find("ics-calendar").unwrap();
-        let m: Manifest = serde_json::from_str(b.manifest).unwrap();
-        // (a module: it draws the card and the reminder; the island reads the link for it)
-        assert_eq!(m.kind, "wasm");
+    fn a_module_that_brings_a_calendar_names_only_its_own_link() {
+        let m: Manifest = serde_json::from_value(json!({
+            "id": "ics-calendar", "name": "Calendar", "kind": "wasm", "module": "ics-calendar.wasm",
+            "permissions": { "calendar": true, "net": ["{{settings.url}}"] },
+            "source": { "http": "{{settings.url}}", "every": "{{settings.poll_min}}m", "format": "ics", "when": "always", "max_kb": 8000 },
+            "needs": ["url"],
+            "settings": { "url": { "type": "text", "default": "" }, "poll_min": { "type": "number", "default": 10 } }
+        }))
+        .unwrap();
         assert!(brings_a_calendar(&m));
         // switched on with no link yet: waiting for the link is not a fault
-        assert!(check(&m, std::path::Path::new(""), true).is_none());
+        assert!(check_manifest(&m).is_none());
         assert!(missing(&m, &json!({ "url": "  " })) && !missing(&m, &json!({ "url": "https://x.example/a.ics" })));
         // with a link, the only host it may ask is the link's
         let v = json!({ "url": "https://calendar.google.com/calendar/ical/x/basic.ics", "poll_min": 10 });
@@ -2391,15 +2602,15 @@ mod tests {
         // a module may name only a calendar, and only an address on its own list
         let mut json_source = m.clone();
         json_source.source.format = "json".into();
-        assert!(check(&json_source, std::path::Path::new(""), true).unwrap().contains("only for a calendar"));
+        assert!(check_manifest(&json_source).unwrap().contains("only for a calendar"));
         let mut elsewhere = m.clone();
         elsewhere.needs.clear();
         elsewhere.source.http = "https://evil.example.com/a.ics".into();
-        assert!(check(&elsewhere, std::path::Path::new(""), true).is_some());
+        assert!(check_manifest(&elsewhere).is_some());
         // without an address, a module still has no network
         let mut net_only = m.clone();
         net_only.source.http.clear();
-        assert!(check(&net_only, std::path::Path::new(""), true).unwrap().contains("cannot ask the network"));
+        assert!(check_manifest(&net_only).unwrap().contains("cannot ask the network"));
     }
 
     #[test]
