@@ -145,15 +145,19 @@ fn http_get(url: &str, accept: &str, cap: usize) -> Result<Vec<u8>, Fetch> {
 
 /// The tag of a repository's latest release: its `/releases/latest` page sends you on to `/releases/tag/<tag>`. None when
 /// it has no release (that page then sends you to the list of releases, or nowhere).
+/// The tag in the address the page of the latest release sends you on to.
+fn tag_from(location: &str) -> Option<String> {
+    let tag = location.split("/releases/tag/").nth(1).map(|t| t.split(['?', '#']).next().unwrap_or(t).to_string());
+    tag.filter(|t| ref_ok(t))
+}
+
 fn latest_tag(repo: &str) -> Result<Option<String>, Fetch> {
     let agent = ureq::AgentBuilder::new().redirects(0).timeout(Duration::from_secs(30)).user_agent("NADI-plugin-installer").build();
+    // (with no redirect followed, ureq hands a 3xx back as an answer, not an error)
+    let tag_of = |resp: &ureq::Response| tag_from(resp.header("Location").unwrap_or(""));
     match agent.get(&format!("https://github.com/{repo}/releases/latest")).call() {
-        Ok(_) => Ok(None),
-        Err(ureq::Error::Status(c, resp)) if matches!(c, 301 | 302 | 303 | 307 | 308) => {
-            let to = resp.header("Location").unwrap_or("");
-            let tag = to.split("/releases/tag/").nth(1).map(|t| t.split(['?', '#']).next().unwrap_or(t).to_string());
-            Ok(tag.filter(|t| ref_ok(t)))
-        }
+        Ok(resp) => Ok(if (301..=308).contains(&resp.status()) { tag_of(&resp) } else { None }),
+        Err(ureq::Error::Status(c, resp)) if matches!(c, 301 | 302 | 303 | 307 | 308) => Ok(tag_of(&resp)),
         Err(ureq::Error::Status(404, _)) => Err(Fetch::NotFound),
         Err(ureq::Error::Status(c, _)) => Err(Fetch::Other(format!("GitHub said {c}."))),
         Err(ureq::Error::Transport(t)) => Err(Fetch::Other(format!("Cannot reach GitHub ({}).", t.kind()))),
@@ -418,12 +422,13 @@ fn look(app: AppHandle, text: String, wanted: Option<String>) -> Result<Found, S
         asset = Some(format!("https://github.com/{repo}/releases/download/{reference}/{ASSET}"));
     }
     let tarball = format!("https://codeload.github.com/{repo}/tar.gz/{reference}");
-    let fetched = match &asset {
+    // (whether it is a release's built file: a repository's own source holds no built module)
+    let (fetched, built) = match &asset {
         Some(u) => match http_get(u, "application/octet-stream", MAX_BYTES) {
-            Err(Fetch::NotFound) => http_get(&tarball, "application/octet-stream", MAX_BYTES),
-            other => other,
+            Err(Fetch::NotFound) => (http_get(&tarball, "application/octet-stream", MAX_BYTES), false),
+            other => (other, true),
         },
-        None => http_get(&tarball, "application/octet-stream", MAX_BYTES),
+        None => (http_get(&tarball, "application/octet-stream", MAX_BYTES), false),
     };
     let bytes = fetched.map_err(|f| match f {
         Fetch::NotFound => format!("{repo} has no version called {reference}."),
@@ -457,6 +462,9 @@ fn look(app: AppHandle, text: String, wanted: Option<String>) -> Result<Found, S
         let Ok(folder) = stage(&stage_root, &slot, &mine) else { continue };
         let Some((m, mut problem)) = plugins::inspect(&folder) else { continue };
         let id = if m.id.is_empty() { fallback.clone() } else { m.id.clone() };
+        if !built && problem.as_deref().is_some_and(|p| p.contains("is not in the folder")) {
+            problem = Some(format!("Not built: {repo} has no release with {ASSET} yet."));
+        }
         if !plugins::valid_id(&id) {
             problem.get_or_insert("The id must be lower case letters, digits, '.', '-' or '_'.".into());
         }
@@ -559,6 +567,15 @@ pub fn repo_install(app: AppHandle, token: String, ids: Vec<String>) -> Result<V
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_latest_release_is_read_from_where_its_page_sends_you() {
+        assert_eq!(tag_from("https://github.com/Llyme/nadi-plugins/releases/tag/v1.0.0").as_deref(), Some("v1.0.0"));
+        assert_eq!(tag_from("/Llyme/nadi-plugins/releases/tag/v2.1?x=1").as_deref(), Some("v2.1"));
+        // no release: the page sends you to the list of them
+        assert_eq!(tag_from("https://github.com/Llyme/nadi-plugins/releases"), None);
+        assert_eq!(tag_from(""), None);
+    }
 
     #[test]
     fn a_link_is_read_in_the_ways_people_write_it() {
