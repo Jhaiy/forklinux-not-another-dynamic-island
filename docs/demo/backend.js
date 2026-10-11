@@ -448,7 +448,8 @@
         sizeAnim = [lw, lh, posX + winW / 2];
         velW.v = 0;
         velH.v = 0;
-        NADI.emit("view-tick", wantView);
+        // (what is playing is the Now playing plugin's pill now: the page names it by its plugin)
+        NADI.emit("view-tick", wantView === "media" ? "pg-now-playing" : wantView === "work" ? "pg-work" : wantView);
         if (wantView !== "idle") {
           st.shown = true;
           edgeRevealed = false;

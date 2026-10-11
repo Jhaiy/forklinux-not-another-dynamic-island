@@ -72,6 +72,9 @@ fn all_sessions() -> Vec<Session> {
     out
 }
 
+/// Some plugin that is on may see the cover pictures (set by the poll thread).
+static WANT_ART: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 fn read_snapshot(session: &Session) -> windows::core::Result<Option<MediaSnapshot>> {
     let playback = session.GetPlaybackInfo()?;
     let status = playback.PlaybackStatus()?;
@@ -111,7 +114,8 @@ fn read_snapshot(session: &Session) -> windows::core::Result<Option<MediaSnapsho
         .and_then(|c| c.IsNextEnabled().ok())
         .unwrap_or(true);
 
-    let art = read_thumbnail(&props).ok().flatten();
+    // (a picture read and encoded each second is a lot of work and of garbage: only while a plugin wants it)
+    let art = if WANT_ART.load(Ordering::Relaxed) { read_thumbnail(&props).ok().flatten() } else { None };
 
     Ok(Some(MediaSnapshot {
         has_session: true,
@@ -178,16 +182,34 @@ fn publish_for_plugins(state: &IslandState, snaps: &[MediaSnapshot]) {
     if !state.plugins.needs_media() {
         return;
     }
+    // (a picture is told once for each change: its id says which it is, and `media_arts` holds the pictures)
+    let mut arts = state.media_arts.lock().unwrap();
+    arts.retain(|source, _| snaps.iter().any(|s| &s.source == source));
     let sessions: Vec<serde_json::Value> = snaps
         .iter()
         .map(|s| {
+            let art_id = match &s.art {
+                Some(a) => {
+                    let id = a.bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3));
+                    if arts.get(&s.source).map(|(i, _)| *i) != Some(id) {
+                        arts.insert(s.source.clone(), (id, a.clone()));
+                    }
+                    id
+                }
+                None => {
+                    arts.remove(&s.source);
+                    0
+                }
+            };
             serde_json::json!({
                 "source": s.source, "title": s.title, "artist": s.artist, "playing": s.playing,
                 "position": s.position.round(), "duration": s.duration.round(),
                 "can_previous": s.can_previous, "can_next": s.can_next,
+                "can_seek": s.can_seek, "can_rate": s.can_rate, "rate": s.rate, "art_id": art_id,
             })
         })
         .collect();
+    drop(arts);
     let value = serde_json::Value::Array(sessions);
     let mut last = state.media_seen.lock().unwrap();
     // (a module is told at every change; while something plays, the position moves each second)
@@ -205,6 +227,7 @@ pub fn spawn(app: AppHandle, state: Arc<IslandState>) {
         }
         let mut last_tracks: Vec<(String, String)> = Vec::new();
         loop {
+            WANT_ART.store(state.plugins.needs_media_art(), Ordering::Relaxed);
             let snaps = snapshots_now();
             state.has_media.store(!snaps.is_empty(), Ordering::Relaxed);
             publish_for_plugins(&state, &snaps);
@@ -221,7 +244,9 @@ pub fn spawn(app: AppHandle, state: Arc<IslandState>) {
             // `main.js` had finished loading and calling `listen()`, silently
             // losing the session forever. One JSON emit/sec is cheap enough
             // to not need the optimization.
-            let _ = app.emit("media-tick", snaps);
+            // (the page needs the words and the time, not the pictures: they are a lot to send each second)
+            let light: Vec<MediaSnapshot> = snaps.iter().map(|s| MediaSnapshot { art: None, ..s.clone() }).collect();
+            let _ = app.emit("media-tick", light);
             std::thread::sleep(Duration::from_millis(POLL_MS));
         }
     });

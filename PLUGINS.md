@@ -40,7 +40,11 @@ host knows none of them by name.
 | see what is playing, press play / next | | `media`, `media_control` | yes |
 | see how busy the CPU and memory are | | `system` | yes |
 | hear the sound (levels and bands) | | `audio` | yes |
-| see which programs have a window | | `processes`, `titles` | yes |
+| see which programs have a window | | `processes`, `titles`, `programs` | yes |
+| know how long the keyboard and the mouse were left alone | | `idle` | yes |
+| read what other apps notify | | `notifications` | yes |
+| run a command (`git`...), in the shape the manifest lists | | `run` | yes |
+| keep a small file between runs | | `storage` | yes |
 | read a file when it changes | | `files` | yes |
 | ask the network | listed hosts | never | yes |
 | keep time without being polled | `every` | `wake_in` | yes |
@@ -63,15 +67,9 @@ folder: the plugins come from a repository (see below) or from you. The native p
 | plugin | kind | what it does | what it looks at |
 |---|---|---|---|
 | Games | native | the game you are playing, for how long, and how it runs (FPS, GPU, CPU, memory); a pill | which programs fill a screen with no title bar; Windows' own counters |
-| Work | native | what you work on: your editor, your hours; a pill for the session you are in | the window in front and its title, how long since you touched the keyboard, git for the open project |
 | Page Reader | native | a card in the expanded island for each page you have open (a walkthrough, a post, an article...; a page of no known kind has none) | the browser windows, and what the NADI browser extension sends (never a private window or a blocked site) |
 | Downloads | native | what the browsers, Steam and qBittorrent are downloading | partial files in the download folders, the browsers' history, qBittorrent's own files |
 | Claude Code | native | your sessions, and a pill when one needs you or has finished; the 5-hour and 7-day limits as two rings in the hub, with a peek | Claude Code's own session files; for the rings, its own sign-in to Claude (kept encrypted for your Windows user; Claude Code's login is never read), and it asks Anthropic and nothing else |
-| Eyes | native | the two eyes of the island, a widget of the head (they blink, follow the cursor, squash and stretch, and can bounce to the beat and send out a ripple for each hit of the bass), and the face of the collapsed island | where the cursor is; the sound levels |
-| System meters | native | rings in the head for how busy the CPU, the memory and the graphics card are (a widget each) | Windows' own counters |
-| Sound light | native | an aura in the island that dances to what plays (with a most-brightness setting: 0 turns it off), and spills a little outside it | the sound levels |
-| Now playing | native | what is playing, with play, skip, seek, speed; a pill | what Windows says is playing |
-| Notification mirror | native | other apps' notifications on the island | Windows' notification access; Viber's popup |
 
 Each of them can be switched off, and one that is off does nothing: no thread works, no file is read, nothing is asked of Windows
 and its card, its pill and its widgets are gone. **A new install starts blank**: every plugin is off, and the expanded island says
@@ -113,7 +111,7 @@ until you drop a widget there.
 * A widget may open a **page** (a *pane*): the date of the Calendar plugin opens the month view in place of the cards, and pressing it again brings the cards back.
 
 For a plugin written in Rust (a native one), a widget is `head.register({ id, plugin, name, place, rank, width, start, preview, build })` in its
-file in `ui/plugins/` (see `eyes.js` and `system-meters.js`): `start: false` keeps it in the tray until the user
+file in `ui/plugins/` (see `eyes.js` and `claude-code.js`): `start: false` keeps it in the tray until the user
 places it, and `preview()` gives the still picture its tile shows. A ring is `addRing(key, color, plugin, rank, start)`.
 A widget's tooltip is `host.setTip(el, content)`: a string is a headline with its note under it, and anything else is drawn as it is,
 an element or a function that makes one each time the tooltip shows (`tipRows(rows, { title, foot })` in `kit.js` makes a table
@@ -172,6 +170,37 @@ workflow) and attaches `nadi-plugins.tar.gz` to a release, or commits them. An o
 `name` and an `about`, an `order` (ids that come first) and `hidden` (ids kept out); it can never add a permission or an address, those
 come from each manifest. A plugin whose id is one of the app's, or one that is already on the PC from somewhere else, is shown and left
 alone.
+
+## Faces
+
+A plugin may draw for itself. A **face** is a script (`face.js`, in the plugin's folder) that the island runs in a frame it gives it:
+the aura behind the island, the eyes, a card of its own. A plugin that is only faces has `"kind": "face"`; a module may have faces
+too. The manifest lists them:
+
+```json
+"faces": [
+  { "id": "aura", "slot": "backdrop", "file": "face.js" },
+  { "id": "head", "slot": "widget", "file": "face.js", "name": "Eyes", "place": "center", "rank": 20, "width": 72 }
+]
+```
+
+| slot | where the frame is |
+|---|---|
+| `backdrop` | behind what the island shows (role `inside`), and over the window's margin around it (role `outside`: light that spills) |
+| `island` | over the island: the collapsed island, and the hub's head and cards |
+| `widget` | a widget of the head (`name`, `place`, `rank`, `width`, `height`: the row's height when it says none) |
+| `card` | a card of the hub (`height`) |
+
+The frame is **sandboxed**: no network, no storage, no way into the island's page, a script of at most 600 KB. All it can do is paint
+in its frame and press. What reaches it is what the plugin's permissions allow (`audio`: the sound, already understood; `cursor`:
+where the cursor is, never what it clicks) and what the island is doing. The script has a small `nadi`:
+
+* `nadi.on("frame", fn)`: once for every frame the page draws, while the frame is shown, with `{ now, dt, view, island: { w, h, x, y,
+  r, pad }, win: { w, h }, rect: { x, y, w, h } (this frame, in the window), peers (where the plugin's widgets are, in the island's
+  pixels), audio, cursor: { x, y, dx, dy, speed, hover, seq } }`. It paints; it needs no timer of its own.
+* `nadi.on("event", fn)`: `{ name, data }` for `view`, `hub-open`, `blip`, `boop` and `beat` (a hit of the bass: `{ strength, pan }`).
+* `nadi.on("resize", fn)`; `nadi.settings` (the plugin's settings, kept up to date); `nadi.role`, `nadi.face`, `nadi.plugin`.
+* `nadi.press(id, args)`: tells the plugin's module, if it has one (an `action` event with `action == "face"`).
 
 ## The manifest (declarative)
 
@@ -347,7 +376,13 @@ to that call as `{ "text": ... }`.
 | `module` | the `.wasm` file, in the plugin's folder |
 | `permissions.audio` | hear what is playing, as a level and 16 bands (about 20 times a second; `bands` is the scale of the island's lights and fills up on loud music, `spectrum` keeps its range, for a meter). Never the sound. |
 | `permissions.processes` | see which programs have a window, and which is in front (every 2 s) |
-| `permissions.titles` | ... and the titles of those windows (a browser's title is its page) |
+| `permissions.titles` | ... and the titles of those windows (a browser's title is its page), and the popups that have no button in the task bar; each window has an `id`, a size, and `tool` |
+| `permissions.programs` | ... and, for each, where the program is (`path`), its name, and its icon (a `data:` address, told the first time only) |
+| `permissions.idle` | `idle_s` in the `processes` event: seconds since the keyboard or the mouse was last used (never what was typed) |
+| `permissions.notifications` | an event with the title and the text of what other apps notify (Windows' toasts), once for each; Windows asks the user once |
+| `permissions.open` | links a banner of the module may open when it is pressed (`["viber://", "https://discord.com/"]`: it starts with one of them) |
+| `permissions.run` | command lines it may have run, each as written: `"git -C * status --porcelain"` (`*` is one argument the module chooses, never one that starts with `-`). The island runs it without a window, for up to 8 seconds, and tells the module what it printed. |
+| `permissions.storage` | a small file of its own (up to 64 KB), told with the start and written when a reply says `store` |
 | `permissions.files` | files it may read when they change (`~` and `%VARIABLES%` are filled in; the last 256 KB) |
 | `permissions.calendar` | the events of the island's calendar that are not over yet (an hour of grace), when they change |
 | `permissions.media` | what is playing: a session for each player, with the title, the artist and the position (every second while it plays). Never the picture. |
@@ -376,11 +411,13 @@ import nothing. The event and the answer are JSON.
 { "event": "tick", "wake": true, ... }                  // the manifest's `tick`, or its own `wake_in` came due
 { "event": "audio", "audio": { "level": 0.5, "bands": [ ...16 numbers 0..1 ], "spectrum": [ ...16 numbers 0..1 ], "beat": true, "kick": false, "hit": 0.4,
                                "kind": "music", "voice": 0.1, "bpm": 123.4, "energy": 0.6, "pan": 0.0 }, ... }
-{ "event": "processes", "windows": [ { "exe": "endfield.exe", "pid": 4120, "title": "", "front": true } ], ... }
+{ "event": "processes", "windows": [ { "exe": "endfield.exe", "pid": 4120, "title": "", "front": true } ], "idle_s": 3.2, ... }
 { "event": "file", "path": "C:/Users/me/x.log", "text": "...", ... }
 { "event": "calendar", "events": [ { "uid": "a", "summary": "Standup", "start_ms": ..., "end_ms": ..., "all_day": false } ], ... }
 { "event": "media", "sessions": [ { "source": "Spotify.exe", "title": "...", "artist": "...", "playing": true, "position": 31, "duration": 214, "can_previous": true, "can_next": true } ], ... }
 { "event": "system", "system": { "cpu": 12.5, "ram": 49.0, "ram_used_gb": 13.6, "ram_total_gb": 27.6 }, ... }
+{ "event": "notifications", "notifications": [ { "seq": 7, "app": "Discord", "title": "Sam", "body": "are you there?" } ], ... }
+{ "event": "command", "id": "branch", "code": 0, "stdout": "main", ... }   // the answer of a command it asked for
 { "event": "action", "action": "snooze", "args": null, ... }   // a button was pressed (on a card, a pill, or in the plugin's settings)
 
 // out (everything optional; a thing the answer does not mention stays as it was; null takes it away)
@@ -410,14 +447,17 @@ import nothing. The event and the answer are JSON.
 * `wake_ms` asks to be called again after that long (50 ms to a day): a module that keeps time asks for the next minute and
   needs no `tick`. The last one asked for is the one kept.
 * `quiet` asks the other plugins to hold their peace while something fills the screen; `ambient` banners and pills wait for it.
-* `media` presses a button of the player (the plugin must have `media_control`).
+* `media` presses a button of the player (the plugin must have `media_control`): `{ "action": "play_pause" | "next" | "previous" | "focus" | "seek" | "seek_by" | "set_rate", "source", "value" }`.
+* `run` asks for commands (`[{ "id": "branch", "line": ["git", "-C", "C:/proj", "rev-parse", "--abbrev-ref", "HEAD"] }]`, up to 4); each answers with a `command` event. `store` keeps a value (see `permissions.storage`).
+* `cards_more` lists cards after the first (up to 5, each with an `id` of its own); they replace the ones it had. A card and a pill may have an `image` (a `data:` raster, or `"keep"`: the one it had), and a card a `seek` block: a thin bar you can press, which calls the module back with `fraction`.
+* A banner (`say`) may have a `title` of its own, an `open` link (see `permissions.open`) that pressing it opens, and a `group`: banners of one app pile up, and too many in a row become one that counts them.
 
 * `widgets` draws the widgets its manifest lists, and `pane` a page. A widget is listed in the manifest
   (`"widgets": [{ "id", "name", "place", "rank", "width", "interactive", "start" }]`) and answered with
   `"widgets": { "<id>": { "blocks": [...], "tip": [...] } }`; it is in the tray of edit mode like any widget, and in the head
   from the start unless `"start": false`. A pane is `"pane": { "title", "blocks": [...], "open": true }` (`open` brings it up
   now; `"pane": null` takes it away and the cards are back). Both are made of blocks the island draws: `text` (`kind`: title,
-  big, small, muted, note, warn), `clock` (`"time"` or `"date"`: the island keeps it ticking, so it costs no call), `bar`,
+  big, small, muted, note, warn), `bars` (thin stacked bars, `label`, `part`, `color`; wide with the number in a tooltip), `clock` (`"time"` or `"date"`: the island keeps it ticking, so it costs no call), `bar`,
   `head` (a title with `prev` and `next` buttons and a `press` id), `grid` (up to seven columns: the Calendar's month; its `cells`
   carry `t`, `id`, `state`, `dots`), `rows` (title, sub, time, past) and `buttons` (up to four). A press comes back as an
   `action` event: `action == "widget"` with `args == { "id", "pane_open" }`, or `action == "pane"` with `args == { "id" }`. They go

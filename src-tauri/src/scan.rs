@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetWindow, GetWindowLongW, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
+    EnumWindows, GetWindow, GetWindowLongW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindowVisible,
     GWL_EXSTYLE, GW_OWNER, WS_EX_TOOLWINDOW,
 };
 
@@ -17,23 +17,35 @@ pub struct Win {
     pub exe: String,
     pub title: String,
     pub minimized: bool,
+    /// its size on the screen, px
+    pub w: i32,
+    pub h: i32,
+    /// a tool window (a popup that has no place in the task bar)
+    pub tool: bool,
 }
 
 /// Top-level, visible, titled, un-owned, non-cloaked windows in z-order (front
 /// first), minus the island's own. Cloaked windows (other virtual desktops,
 /// suspended UWP frames) are on no screen, so they are skipped.
 pub fn visible_windows() -> Vec<Win> {
+    visible_windows_with(false)
+}
+
+/// The same, and with `tools` the tool windows too (flagged `tool`): the popups of other apps.
+pub fn visible_windows_with(tools: bool) -> Vec<Win> {
     struct Ctx {
         out: Vec<Win>,
         exes: HashMap<u32, String>,
         me: u32,
+        tools: bool,
     }
     unsafe extern "system" fn cb(h: HWND, lp: LPARAM) -> BOOL {
         let ctx = &mut *(lp.0 as *mut Ctx);
         if !IsWindowVisible(h).as_bool() || GetWindow(h, GW_OWNER).map_or(false, |o| !o.is_invalid()) {
             return BOOL(1);
         }
-        if GetWindowLongW(h, GWL_EXSTYLE) as u32 & WS_EX_TOOLWINDOW.0 != 0 {
+        let tool = GetWindowLongW(h, GWL_EXSTYLE) as u32 & WS_EX_TOOLWINDOW.0 != 0;
+        if tool && !ctx.tools {
             return BOOL(1);
         }
         let mut cloaked = 0u32;
@@ -70,10 +82,21 @@ pub fn visible_windows() -> Vec<Win> {
             exe,
             title: String::from_utf16_lossy(&buf[..n.min(256)]),
             minimized: IsIconic(h).as_bool(),
+            tool,
+            w: {
+                let mut r = windows::Win32::Foundation::RECT::default();
+                let _ = GetWindowRect(h, &mut r);
+                r.right - r.left
+            },
+            h: {
+                let mut r = windows::Win32::Foundation::RECT::default();
+                let _ = GetWindowRect(h, &mut r);
+                r.bottom - r.top
+            },
         });
         BOOL(1)
     }
-    let mut ctx = Ctx { out: Vec::new(), exes: HashMap::new(), me: std::process::id() };
+    let mut ctx = Ctx { out: Vec::new(), exes: HashMap::new(), me: std::process::id(), tools };
     unsafe {
         let _ = EnumWindows(Some(cb), LPARAM(&mut ctx as *mut _ as isize));
     }

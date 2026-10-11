@@ -108,6 +108,41 @@
     mediaEmit();
   };
   const primaryOf = (snaps) => snaps.find((m) => m.playing) || snaps[0] || mediaSnap();
+  // ---- Now playing, as the module answers (the real one is now-playing in nadi-plugins): a pill and a card from what plays
+  const npPrimary = (snaps) => snaps.find((m) => m.playing) || snaps.find((m) => m.title) || snaps[0] || null;
+  const npButtons = (m) => [
+    ...(m.can_previous ? [{ label: "Previous", icon: "prev", action: "prev" }] : []),
+    { label: m.playing ? "Pause" : "Play", icon: m.playing ? "pause" : "play", action: "toggle" },
+    ...(m.can_next ? [{ label: "Next", icon: "next", action: "next" }] : []),
+  ];
+  const npOn = () => {
+    try {
+      return isOn("now-playing");
+    } catch (_) {
+      return true; // (asked before the list of plugins exists)
+    }
+  };
+  function npPill(snaps) {
+    const m = npPrimary(snaps);
+    if (!m || !npOn()) return null;
+    return { plugin: "now-playing", name: "Now playing", icon: "music", image: m.art || "", title: m.title, sub: m.artist, right: "", progress: m.duration > 0 ? m.position / m.duration : null, bars: [], buttons: npButtons(m), rank: 30, w: 260, h: 40, look: "" };
+  }
+  function npCard(snaps) {
+    const m = npPrimary(snaps);
+    if (!m || !npOn()) return null;
+    const body = [{ kind: "buttons", items: npButtons(m) }];
+    if (m.duration > 0) body.push({ kind: "seek", value: m.position / m.duration, action: "seek" });
+    const more = [];
+    if (m.can_seek) more.push({ label: "Back 5 seconds", icon: "back", action: "back" }, { label: "Forward 5 seconds", icon: "fwd", action: "fwd" });
+    if (m.can_rate) more.push({ label: `${Number(m.rate.toFixed(2))}×`, icon: "", action: "rate" });
+    if (more.length) body.push({ kind: "buttons", items: more });
+    const others = snaps.filter((o) => o.source !== m.source && o.title);
+    if (others.length) body.push({ kind: "list", rows: others.map((o) => ({ title: o.title, sub: o.artist, progress: null })) });
+    return { plugin: "now-playing", name: "Now playing", icon: "music", rank: 10, title: m.title, sub: m.artist, peek: "", image: m.art || "", body };
+  }
+  let npSnaps = [];
+  W.npPill = () => npPill(npSnaps);
+  W.npCard = () => npCard(npSnaps);
   function mediaEmit() {
     const snaps = [mediaSnap()].filter((m) => m.has_session);
     const second = mediaSnap2();
@@ -117,6 +152,8 @@
     if (snaps.length > 0 && key !== media.lastTrack) st.peekRequest = true;
     media.lastTrack = snaps.length > 0 ? key : "";
     NADI.emit("media-tick", snaps);
+    npSnaps = snaps;
+    NADI.emit("plugin-pill", { plugin: "now-playing", pill: npPill(snaps) });
     W.onMedia?.(primaryOf(snaps));
   }
   W.mediaEmit = mediaEmit;
@@ -550,12 +587,42 @@
     const fresh = prev && now() - prev.last <= RECENT_ACTIVE_S;
     recent.set(cat, { last: now(), started: fresh ? prev.started : now(), app: APPS[appId].name, exe: APPS[appId].exe, id: appId });
   }
+  // ---- Work, as the module answers (the real one is work in nadi-plugins): a pill, and a card for each kind you used lately
+  const WORK_GLYPH = { coding: "code", writing: "pen", design: "sparkle", communication: "mail", media: "music", gaming: "gamepad", browsing: "globe" };
+  const fmtDur = (s) => (s >= 3600 ? `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m` : s >= 60 ? `${Math.floor(s / 60)}m` : "<1m");
+  W.workCards = (a) => {
+    const out = [];
+    const c = a.coding;
+    if (c) {
+      const p = c.project_info && c.project_info.branch ? c.project_info : null;
+      const body = [];
+      if (c.file) body.push({ kind: "text", text: `${c.language ? `${c.language} · ` : ""}${c.file}${c.unsaved ? " ●" : ""}` });
+      let peek = fmtDur(c.today_secs);
+      if (p && p.changed) {
+        const peak = Math.max(1, ...p.files.map((f) => f.added + f.deleted));
+        body.push({ kind: "list", rows: p.files.map((f) => ({ title: f.name, sub: f.status === "A" && !f.added ? "new" : `+${f.added} −${f.deleted}`, progress: f.added + f.deleted ? Math.max(0.1, (f.added + f.deleted) / peak) : null })) });
+        if (p.changed > p.files.length) body.push({ kind: "text", text: `+${p.changed - p.files.length} more` });
+        body.push({ kind: "badge", text: `${p.branch} · ${p.changed} files` });
+        peek = `+${p.added} −${p.deleted}`;
+      } else if (p) {
+        body.push({ kind: "badge", text: p.branch });
+        peek = "No changes";
+      }
+      out.push({ plugin: "work", id: "coding", name: "Work", icon: "code", rank: 40, title: c.project || "Coding", sub: c.active ? "Editing" : "Not at the keyboard", peek, image: "", body });
+    }
+    for (const w of a.work.filter((x) => x.category !== "browsing")) {
+      out.push({ plugin: "work", id: w.category, name: "Work", icon: WORK_GLYPH[w.category] || "dot", rank: 50, title: w.app_name || LABELS[w.category] || "Working", sub: `${LABELS[w.category] || "Working"} for ${fmtDur(w.going_secs)}`, peek: fmtDur(w.going_secs), image: w.icon || "", body: [] });
+    }
+    return out;
+  };
   function workPoll() {
     if (!S().work_detection) {
       if (confirmed !== null) {
         confirmed = null;
         candidate = "idle";
         st.hasWork = false;
+        W.workPillNow = null;
+        NADI.emit("plugin-pill", { plugin: "work", pill: null });
         NADI.emit("work-tick", { has_session: false, category: "", label: "", app_name: "", started_at_secs: 0 });
       }
       return;
@@ -595,6 +662,8 @@
     st.hasWork = has && category !== "browsing";
     // browsing a page the island understands: the pill names the page, not the activity
     const k = category === "browsing" ? W.pageKind() : null;
+    W.workPillNow = st.hasWork ? { plugin: "work", name: "Work", icon: WORK_GLYPH[category] || "dot", image: "", title: LABELS[category] || "Away", sub: confirmedApp, right: fmtDur(now() - confirmedSince), progress: null, bars: [], buttons: [], rank: 10, w: 260, h: 40, look: "" } : null;
+    NADI.emit("plugin-pill", { plugin: "work", pill: isOn("work") ? W.workPillNow : null });
     NADI.emit("work-tick", {
       has_session: has,
       category,
@@ -710,15 +779,15 @@
   const lookTick = () => NADI.emit("look-tick", C.look_state());
   const BUILT_IN = [
     { id: "games", name: "Games", description: "The game you are playing, for how long, and how it runs.", sees: [["windows"], ["performance"]], on: () => S().game_detection, set: (v) => patch({ game_detection: v }) },
-    { id: "work", name: "Work", description: "What you work on: your editor, your hours, and a pill for the session you are in.", sees: [["windows"], ["idle time"], ["use CLI", "git"]], on: () => S().work_detection, set: (v) => patch({ work_detection: v }) },
+    { id: "work", kind: "wasm", name: "Work", description: "What you work on: your editor, your hours, and a pill for the session you are in.", sees: [["windows"], ["idle time"], ["use CLI", "git"]], on: () => S().work_detection, set: (v) => patch({ work_detection: v }) },
     { id: "page-reader", name: "Page Reader", description: "A card for each page you have open, and what the page in front of you says (needs the NADI browser extension).", sees: [["windows"], ["browser extension"]], on: () => S().page_preview, set: (v) => patch({ page_preview: v }), note: () => (S().page_preview ? "Reading pages in Edge." : null), settings: [{ key: "images", label: "Show the page's main picture", type: "toggle", get: () => S().page_images, set: (v) => patch({ page_images: v }) }] },
     { id: "downloads", name: "Downloads", description: "What your browsers, Steam and qBittorrent are downloading right now.", sees: [["read files and folders"]], on: () => S().download_detection, set: (v) => patch({ download_detection: v }) },
     { id: "claude-code", name: "Claude Code", description: "Your Claude Code sessions as cards, a pill when one needs you or has finished, and how much of your Claude 5-hour and 7-day limits you have used.", sees: [["read files and folders"], ["windows"], ["network", "api.anthropic.com, console.anthropic.com"]], on: () => S().llm_detection, set: (v) => { patch({ llm_detection: v }); NADI.emit("usage-tick", usageSnap()); }, actions: [{ id: "usage_login", label: "Sign In", ask: "Paste the code the Claude page shows", then: "usage_finish" }], settings: [{ key: "alerts", label: "Pill when a session needs me or finishes", type: "toggle", get: () => S().llm_brief, set: (v) => patch({ llm_brief: v }) }, { key: "usage", label: "Rings for how much of my limits is used", type: "toggle", get: () => W.usageRings, set: (v) => { W.usageRings = v; NADI.emit("usage-tick", usageSnap()); } }] },
-    { id: "now-playing", name: "Now playing", description: "A pill and a card for what is playing, with play, skip, seek and speed.", sees: [["media"], ["media pictures"], ["media control"]] },
-    { id: "toasts", name: "Notification mirror", description: "Shows the notifications of other apps (Discord, Viber, ...) on the island.", sees: [["notifications"], ["windows"]] },
-    { id: "eyes", name: "Eyes", description: "The two eyes of the island: they blink, look at the cursor, squash and stretch as it moves, glance around when it rests, and show moods. They can bounce to the beat of what you play.", sees: [["cursor position"], ["audio"]], on: () => S().show_eyes !== false, set: (v) => { patch({ show_eyes: v }); lookTick(); }, settings: [{ key: "react", label: "React to sound", type: "toggle", get: () => W.eyesReact, set: (v) => { W.eyesReact = v; lookTick(); } }, { key: "rings", label: "Ripples on the bass", type: "toggle", get: () => W.eyesRings, set: (v) => { W.eyesRings = v; lookTick(); } }] },
-    { id: "sound-light", name: "Sound light", description: "An aura that lives in the island and dances to what you play: soft lights that follow the music, ripples on the bass, a warm halo for a voice. A little of it spills out of the island.", sees: [["audio"]], on: () => S().react_to_audio !== false, set: (v) => { patch({ react_to_audio: v }); lookTick(); }, settings: [{ key: "brightness", label: "Max brightness (0 = off)", type: "range", min: 0, max: 100, step: 5, unit: "%", get: () => W.lightBrightness, set: (v) => { W.lightBrightness = v; lookTick(); } }, { key: "ambient", label: "Light outside the island", type: "range", min: 0, max: 100, step: 5, unit: "%", get: () => S().audio_bleed ?? 60, set: (v) => { patch({ audio_bleed: v }); lookTick(); } }] },
-    { id: "system-meters", name: "System meters", description: "Rings in the head of the expanded island for how busy the CPU, the memory and the graphics card are.", sees: [["performance"]] },
+    { id: "now-playing", kind: "wasm", name: "Now playing", description: "A pill and a card for what is playing, with play, skip, seek and speed.", sees: [["media"], ["media pictures"], ["media control"]] },
+    { id: "toasts", kind: "wasm", name: "Notification mirror", description: "Shows the notifications of other apps (Discord, Viber, ...) on the island.", sees: [["notifications"], ["windows"]] },
+    { id: "eyes", kind: "face", faces: [{ id: "island", slot: "island", file: "face.js" }, { id: "head", slot: "widget", file: "face.js", name: "Eyes", place: "center", rank: 20, width: 72, shared: true }], name: "Eyes", description: "The two eyes of the island: they blink, look at the cursor, squash and stretch as it moves, glance around when it rests, and show moods. They can bounce to the beat of what you play.", sees: [["cursor position"], ["audio"]], on: () => S().show_eyes !== false, set: (v) => { patch({ show_eyes: v }); lookTick(); }, settings: [{ key: "react", label: "React to sound", type: "toggle", get: () => W.eyesReact, set: (v) => { W.eyesReact = v; NADI.emit("plugin-setting", { plugin: "eyes", key: "react", value: v }); } }, { key: "rings", label: "Ripples on the bass", type: "toggle", get: () => W.eyesRings, set: (v) => { W.eyesRings = v; NADI.emit("plugin-setting", { plugin: "eyes", key: "rings", value: v }); } }] },
+    { id: "sound-light", kind: "face", faces: [{ id: "aura", slot: "backdrop", file: "face.js" }], name: "Sound light", description: "An aura that lives in the island and dances to what you play: soft lights that follow the music, ripples on the bass, a warm halo for a voice. A little of it spills out of the island.", sees: [["audio"]], on: () => S().react_to_audio !== false, set: (v) => { patch({ react_to_audio: v }); lookTick(); }, settings: [{ key: "brightness", label: "Max brightness (0 = off)", type: "range", min: 0, max: 100, step: 5, unit: "%", get: () => W.lightBrightness, set: (v) => { W.lightBrightness = v; NADI.emit("plugin-setting", { plugin: "sound-light", key: "brightness", value: v }); } }, { key: "ambient", label: "Light outside the island", type: "range", min: 0, max: 100, step: 5, unit: "%", get: () => S().audio_bleed ?? 60, set: (v) => { patch({ audio_bleed: v }); NADI.emit("plugin-setting", { plugin: "sound-light", key: "ambient", value: v }); } }] },
+    { id: "system-meters", kind: "wasm", name: "System meters", description: "How busy the CPU, the memory and the graphics card are: three thin bars in the head, with the numbers in a tooltip, and a ring for each that waits in the tray.", sees: [["performance"]] },
     { id: "time", kind: "wasm", name: "Time", description: "The island says what time it is now and then, in a small pill.", sees: [["clock"]], on: () => S().time_announce, set: (v) => patch({ time_announce: v }), settings: [{ key: "every", label: "Every", type: "choice", options: INTERVALS.map((m, i) => ({ value: i, label: m < 60 ? `${m} minutes` : m === 60 ? "Hour" : `${m / 60} hours` })), get: () => S().time_interval, set: (v) => patch({ time_interval: v }) }, { key: "h24", label: "24-hour clock", type: "toggle", get: () => S().time_24h, set: (v) => patch({ time_24h: v }) }], actions: [{ id: "preview", label: "Show it now" }] },
     { id: "ics-calendar", kind: "wasm", name: "Calendar", description: "A calendar for the island: the events of a calendar link (.ics: Google Calendar, Outlook, iCloud), a month view you open from the date in the head, the next ones on a card, and a banner shortly before one starts.", sees: [["network", "the address you give it (\"Calendar link (.ics)\")"], ["calendar"]], on: () => !!S().calendar_ics_url, set: (v) => patch({ calendar_ics_url: v ? "https://calendar.google.com/calendar/ical/you%40example.com/private-demo/basic.ics" : "" }), settings: [{ key: "url", label: "Calendar link (.ics)", type: "text", get: () => S().calendar_ics_url, set: (v) => patch({ calendar_ics_url: v }) }, { key: "lead_min", label: "How long before (minutes)", type: "number", get: () => S().calendar_reminder_lead_min, set: (v) => patch({ calendar_reminder_lead_min: v }) }], note: () => (S().calendar_ics_url ? `${cal.length} events read.` : "Paste the link of a calendar (.ics) in the setting below.") },
   ];
@@ -742,11 +811,14 @@
       cost: null,
       error: null,
       note: p.note ? p.note() : null,
-      widgets: p.id === "ics-calendar" ? [{ id: "date", name: "Date and time", place: "left", rank: 10, width: 118, interactive: true, start: null }] : [],
+      faces: p.faces || [],
+      widgets: p.id === "ics-calendar" ? [{ id: "date", name: "Date and time", place: "left", rank: 10, width: 118, interactive: true, start: null }] : p.id === "system-meters" ? [{ id: "bars", name: "Bars", place: "right", rank: 50, width: 76, interactive: false, start: null }] : [],
     })),
   });
   C.plugin_rescan = () => C.plugin_list();
-  C.plugin_pills = () => ({ pills: [], rings: {} });
+  C.plugin_pills = () => ({ pills: [W.npPill?.(), isOn("work") ? W.workPillNow : null].filter(Boolean), rings: {} });
+  // the script of a face: the demo carries a copy (see sync.ps1)
+  C.plugin_face = ({ id }) => fetch(`demo/faces/${id}.js`).then((r) => (r.ok ? r.text() : Promise.reject(new Error("no such face"))));
   C.plugin_set = ({ id, on }) => {
     const p = info(id);
     if (p?.set) p.set(on);
@@ -754,6 +826,10 @@
     if (id === "ics-calendar") {
       if (!on) calUi.open = false;
       calEmit(false);
+    }
+    if (id === "system-meters") {
+      NADI.emit("plugin-surface", { plugin: "system-meters", ...smSurface() });
+      NADI.emit("plugin-rings", { plugin: "system-meters", rings: on ? smRings() : [] });
     }
     NADI.emit("plugins-changed", null);
   };
@@ -814,7 +890,25 @@
     return { widgets: { date: { blocks: [{ clock: "time", h24: !!S().time_24h }, { clock: "date" }], tip } }, pane };
   }
   const calEmit = (open) => NADI.emit("plugin-surface", { plugin: "ics-calendar", ...calSurface(open) });
-  C.plugin_surface = () => (isOn("ics-calendar") ? { "ics-calendar": calSurface(false) } : {});
+  // ---- System meters, as the module draws it: bars, a tooltip, and the rings in the tray
+  const SM = [["CPU", "cpu", "#5AC8E6"], ["RAM", "ram", "#B47EE6"], ["GPU", "gpu", "#8ADB6E"]];
+  const smTone = (p, own) => (p >= 95 ? "#E5675C" : p >= 80 ? "#E6A15A" : own);
+  function smSurface() {
+    if (!isOn("system-meters")) return { widgets: {}, pane: null };
+    const bars = SM.map(([l, k, c]) => ({ label: l, part: sys[k] / 100, color: smTone(sys[k], c), text: "" }));
+    const wide = SM.map(([l, k, c]) => ({ label: l, part: sys[k] / 100, color: smTone(sys[k], c), text: `${Math.round(sys[k])}%` }));
+    const tip = [{ text: "System", kind: "title" }, { bars: wide }, { text: `Memory ${((sys.ram / 100) * 32).toFixed(1)} of 32.0 GB`, kind: "muted" }];
+    return { widgets: { bars: { blocks: [{ bars }], tip } }, pane: null };
+  }
+  function smRings() {
+    return SM.map(([l, k, c]) => ({ id: k, pct: sys[k], tip: `${l} · ${Math.round(sys[k])}%`, color: c, start: false }));
+  }
+  setInterval(() => {
+    if (!isOn("system-meters")) return;
+    NADI.emit("plugin-surface", { plugin: "system-meters", ...smSurface() });
+    NADI.emit("plugin-rings", { plugin: "system-meters", rings: smRings() });
+  }, 2000);
+  C.plugin_surface = () => ({ ...(isOn("ics-calendar") ? { "ics-calendar": calSurface(false) } : {}), ...(isOn("system-meters") ? { "system-meters": smSurface() } : {}) });
   function calAct(kind, a) {
     const today = calDay(new Date());
     if (kind === "widget") {
@@ -852,6 +946,18 @@
       case "claude-code.dismiss": return C.llm_dismiss({ id: a.id });
       case "page-reader.press": return C.click_page_button({ label: a.label });
       case "page-reader.image": return C.page_image({ id: a.id });
+      case "now-playing.toggle": return C.media_play_pause({ source: npSnaps[0]?.source });
+      case "now-playing.prev": return C.media_previous({ source: npSnaps[0]?.source });
+      case "now-playing.back": return C.media_seek_by({ deltaSeconds: -5, source: npSnaps[0]?.source });
+      case "now-playing.fwd": return C.media_seek_by({ deltaSeconds: 5, source: npSnaps[0]?.source });
+      case "now-playing.seek": {
+        const m = npPrimary(npSnaps);
+        return m && m.duration > 0 ? C.media_seek({ positionSeconds: (a.fraction ?? 0) * m.duration, source: m.source }) : null;
+      }
+      case "now-playing.rate": {
+        const r = media.rate >= 2 ? 1 : media.rate + 0.25;
+        return C.media_set_rate({ rate: r, source: npSnaps[0]?.source });
+      }
       case "now-playing.play_pause": return C.media_play_pause({ source: a.source });
       case "now-playing.next": return C.media_next({ source: a.source });
       case "now-playing.previous": return C.media_previous({ source: a.source });
@@ -873,10 +979,12 @@
     if (isOn("games") && a.games.length) cards.games = a.games;
     if (isOn("downloads") && a.downloads.length) cards.downloads = a.downloads;
     if (isOn("claude-code") && a.llm.length) cards["claude-code"] = a.llm;
-    if (isOn("work")) cards.work = { coding: a.coding, work: a.work.filter((w) => w.category !== "browsing") };
     const pages = a.work.filter((w) => w.category === "browsing" && w.browse);
     if (isOn("page-reader") && pages.length) cards["page-reader"] = pages;
     const plugins = [];
+    const np = W.npCard?.();
+    if (np) plugins.push(np);
+    if (isOn("work")) plugins.push(...W.workCards(a));
     if (isOn("ics-calendar") && S().calendar_ics_url) {
       const events = cal.filter((e) => e.end_ms >= Date.now() - 3600e3).slice(0, 6);
       const when = (e) => `{when:${e.start_ms}${e.all_day ? ":day" : ""}}`;

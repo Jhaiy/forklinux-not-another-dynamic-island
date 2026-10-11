@@ -74,7 +74,7 @@ It is Windows-only for now. The goal is to stay light: it should never make the 
   network, a time budget for each call and a memory cap, and a module that keeps failing is switched off. The island draws
   everything from a few building blocks, so a plugin cannot make it lag. The *Time* and *Calendar*
   plugins are written this way and come from the nadi-plugins repository (the island itself starts blank); a few others
-  (games, work, the page reader, downloads, Claude Code, now playing, the notification mirror, the eyes, the sound light, the system meters) are written in Rust,
+  (games, the page reader, downloads, Claude Code) are written in Rust,
   because they need what a sandbox must not hand out (the process list, performance counters, files and the login of other
   programs). Settings > Plugins lists them all the same way: what each one asks to see before you switch it on, its own
   settings, a mute for its banners, and Do not disturb. Banners wait by priority. Examples (weather, an audio meter, a

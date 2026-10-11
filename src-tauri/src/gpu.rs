@@ -97,7 +97,11 @@ pub struct GpuState {
 /// GPU busy %, or None when the counters aren't available.
 #[tauri::command]
 pub fn get_gpu_pct(window: WebviewWindow) -> Option<f64> {
-    let state = window.state::<Arc<IslandState>>();
+    pct(&window.state::<Arc<IslandState>>())
+}
+
+/// GPU busy %, from the counters the island keeps open (None until they have a baseline, or when there are none).
+pub fn pct(state: &IslandState) -> Option<f64> {
     let mut guard = state.gpu.sampler.lock().unwrap();
     if guard.as_ref().map_or(true, |s| s.samples >= REBUILD_EVERY) {
         *guard = GpuSampler::open();

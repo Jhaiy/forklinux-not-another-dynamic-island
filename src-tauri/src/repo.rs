@@ -122,6 +122,10 @@ fn http_get(url: &str, accept: &str, cap: usize) -> Result<Vec<u8>, Fetch> {
             return Err(Fetch::Other(format!("GitHub sent the download to {host}, which NADI does not read.")));
         }
         match agent.get(&url).set("Accept", accept).call() {
+            // (with no redirect followed, ureq hands a 3xx back as an answer, not an error)
+            Ok(resp) if (301..=308).contains(&resp.status()) => {
+                url = resp.header("Location").and_then(|l| resolve(&url, l)).ok_or_else(|| Fetch::Other("GitHub sent no place to go.".into()))?;
+            }
             Ok(resp) => {
                 let mut out = Vec::new();
                 resp.into_reader().take(cap as u64 + 1).read_to_end(&mut out).map_err(|e| Fetch::Other(format!("The download broke off ({e}).")))?;
@@ -143,14 +147,14 @@ fn http_get(url: &str, accept: &str, cap: usize) -> Result<Vec<u8>, Fetch> {
     Err(Fetch::Other("GitHub sent it round in circles.".into()))
 }
 
-/// The tag of a repository's latest release: its `/releases/latest` page sends you on to `/releases/tag/<tag>`. None when
-/// it has no release (that page then sends you to the list of releases, or nowhere).
 /// The tag in the address the page of the latest release sends you on to.
 fn tag_from(location: &str) -> Option<String> {
     let tag = location.split("/releases/tag/").nth(1).map(|t| t.split(['?', '#']).next().unwrap_or(t).to_string());
     tag.filter(|t| ref_ok(t))
 }
 
+/// The tag of a repository's latest release: its `/releases/latest` page sends you on to `/releases/tag/<tag>`. None when
+/// it has no release (that page then sends you to the list of releases, or nowhere).
 fn latest_tag(repo: &str) -> Result<Option<String>, Fetch> {
     let agent = ureq::AgentBuilder::new().redirects(0).timeout(Duration::from_secs(30)).user_agent("NADI-plugin-installer").build();
     // (with no redirect followed, ureq hands a 3xx back as an answer, not an error)
@@ -567,6 +571,27 @@ pub fn repo_install(app: AppHandle, token: String, ids: Vec<String>) -> Result<V
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_real_release_downloads() {
+        if std::env::var_os("NADI_TEST_NET").is_none() {
+            return;
+        }
+        let url = "https://github.com/Llyme/nadi-plugins/releases/download/v1.0.0/nadi-plugins.tar.gz";
+        match http_get(url, "application/octet-stream", MAX_BYTES) {
+            Ok(b) => assert!(untar(&b).unwrap().keys().any(|k| k.ends_with("ics-calendar/manifest.json")), "{} bytes", b.len()),
+            Err(Fetch::NotFound) => panic!("not found"),
+            Err(Fetch::Other(e)) => panic!("{e}"),
+        }
+    }
+
+    #[test]
+    fn a_real_release_file_is_read() {
+        let Some(path) = std::env::var_os("NADI_TEST_TGZ") else { return };
+        let bytes = std::fs::read(path).unwrap();
+        let files = untar(&bytes).unwrap();
+        assert!(files.keys().any(|k| k.ends_with("ics-calendar/manifest.json")), "{:?}", files.keys().collect::<Vec<_>>());
+    }
 
     #[test]
     fn the_latest_release_is_read_from_where_its_page_sends_you() {

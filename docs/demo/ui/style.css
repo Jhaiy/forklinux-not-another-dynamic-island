@@ -156,42 +156,56 @@ body.big #pill-glow {
   }
 }
 
-/* the sound's light bleeding outside the island, like YouTube's ambient mode: a copy
-   of the aura, stretched past the island's edges and blurred, behind the island
-   (see paintBleed) */
-#viz-bleed {
+/* what a face draws outside the island (the sound light's spill, like YouTube's ambient mode) */
+#face-outside {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  filter: saturate(1.2);
+}
+
+body.pill-hidden #face-outside,
+body.big #face-outside {
+  display: none;
+}
+
+/* the frames of the plugins' faces (see faces.js): behind the island's content, over it, or in a widget */
+#face-back,
+#face-front {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.face-frame {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
+  border: 0;
+  background: transparent;
+  /* (the frame's page has no colour scheme: a frame whose scheme differs from its page's is painted opaque) */
+  color-scheme: normal;
   pointer-events: none;
-  filter: saturate(1.2); /* (the softness comes from the mask in paintBleed) */
-  display: none;
 }
 
-body.bleeding #viz-bleed {
-  display: block;
+.face-widget {
+  position: relative;
 }
 
-body.pill-hidden #viz-bleed,
-body.big #viz-bleed {
-  display: none;
-}
-
-/* audio aura, painted under every view's content (see paintViz) */
-#viz,
-#rings {
+/* the frames of the head's widgets: over the hub, put where their widgets are (see faces.js) */
+#face-widgets {
   position: absolute;
   inset: 0;
-  width: 100%;
-  height: 100%;
   pointer-events: none;
+  z-index: 4;
 }
 
-#face {
-  display: block;
-  width: 100%;
-  height: 100%;
+#face-widgets .face-frame {
+  inset: auto;
+  width: 0;
+  height: 0;
+  visibility: hidden;
 }
 
 /* shared layout of the compact views */

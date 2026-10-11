@@ -2,7 +2,7 @@
 // plugin that is not a Rust plugin with its own face (ui/plugins/*.js) goes through this, and so do those that want to:
 // a module or a declarative plugin hands the island data (see plugins.rs: `CardOut`, `PillOut`, `RingOut`) and never any
 // markup, so every text goes in as text, every picture is a `data:` raster, and a button only names an action.
-import { FLOATS, addPill, addRing, call, collapsible, el, host, invoke, li, listen, peek, ringEls, setRing, textCol, view } from "./kit.js";
+import { FLOATS, ICON, addPill, addRing, call, collapsible, el, host, invoke, li, listen, peek, ringEls, setRing, textCol, view } from "./kit.js";
 
 // ---------------------------------------------------------------------------------- a moment inside a text
 
@@ -39,7 +39,8 @@ function buttonRow(items, plugin) {
 		const b = el("button", it.icon ? "pg-b icon" : "pg-b");
 		b.type = "button";
 		b.title = it.label || "";
-		if (it.icon) b.innerHTML = li(it.icon);
+		// (the player's own filled icons, or one of the line icons)
+		if (it.icon) b.innerHTML = Object.hasOwn(ICON, it.icon) ? ICON[it.icon] : li(it.icon);
 		else b.textContent = it.label;
 		// (the island's own press on a card must not take this one)
 		b.addEventListener("mousedown", (e) => e.stopPropagation());
@@ -93,6 +94,20 @@ function pluginBlockOf(b, plugin) {
 		img.draggable = false;
 		return { node: img, update: (n) => img.getAttribute("src") !== n.src && (img.src = n.src) };
 	}
+	if (b.kind === "seek") {
+		// a thin bar that can be pressed: where, as a part of its width, goes back to the plugin
+		const bar = el("div", "pg-bar pg-seek");
+		const fill = el("i");
+		bar.append(fill);
+		bar.addEventListener("mousedown", (e) => e.stopPropagation());
+		bar.addEventListener("click", (e) => {
+			const r = bar.getBoundingClientRect();
+			const fraction = Math.max(0, Math.min(1, (e.clientX - r.left) / Math.max(1, r.width)));
+			fill.style.width = `${Math.round(fraction * 100)}%`;
+			call(plugin, b.action, { fraction }).catch(() => {});
+		});
+		return { node: bar, update: (n) => (fill.style.width = `${Math.round(n.value * 100)}%`) };
+	}
 	if (b.kind === "buttons") {
 		// (rebuilt when the buttons change: see the card's signature)
 		return { node: buttonRow(b.items, plugin), update: () => {} };
@@ -131,6 +146,7 @@ function pluginBlockOf(b, plugin) {
 
 const blockSig = (b) =>
 	b.kind +
+	(b.action || "") +
 	(b.rows ? `${b.rows.length}${b.rows.map((r) => (r.progress != null ? "p" : "")).join("")}` : b.values ? b.values.length : b.items ? b.items.map((i) => `${i.action}/${i.icon}/${i.label}`).join("|") : "");
 
 export function pluginCard(c) {
@@ -138,6 +154,11 @@ export function pluginCard(c) {
 	const row = el("div", "now-row");
 	const tile = el("div", "now-icon tile");
 	tile.innerHTML = li(c.icon);
+	// (a picture of its own in place of the icon: what is playing has its cover)
+	const art = el("img", "pg-art hidden");
+	art.alt = "";
+	art.draggable = false;
+	tile.append(art);
 	const col = textCol(c.title, c.sub);
 	row.append(tile, col);
 	card.append(row);
@@ -146,6 +167,12 @@ export function pluginCard(c) {
 	for (const b of blocks) body.append(b.node);
 	if (blocks.length) card.append(body);
 	const update = (d) => {
+		if (art.getAttribute("src") !== (d.image || null)) {
+			if (d.image) art.src = d.image;
+			else art.removeAttribute("src");
+		}
+		art.classList.toggle("hidden", !d.image);
+		tile.classList.toggle("has-art", !!d.image);
 		col.querySelector(".now-title").textContent = whenText(d.title);
 		col.querySelector(".now-sub").textContent = whenText(d.sub);
 		const pk = card.querySelector(".now-peek");
@@ -155,7 +182,7 @@ export function pluginCard(c) {
 	if (c.peek) peek(card, c.peek);
 	update(c);
 	// the cards are rebuilt only when their shape changes; new numbers go in place
-	card._sig = `pg:${c.plugin}:${c.icon}:${c.peek ? "p" : ""}:${c.body.map(blockSig).join(",")}`;
+	card._sig = `pg:${c.plugin}:${c.id || ""}:${c.icon}:${c.peek ? "p" : ""}:${c.body.map(blockSig).join(",")}`;
 	// (a moment in a text reads "Today" or "Tomorrow", which change at midnight: rebuilt by the day)
 	if ([c.title, c.sub, c.peek, JSON.stringify(c.body)].some(hasWhen)) card._sig += `:${new Date().toDateString()}`;
 	card._data = c;
@@ -163,7 +190,7 @@ export function pluginCard(c) {
 	card._rank = c.rank || 70;
 	card.dataset.plugin = c.plugin;
 	card.addEventListener("mousedown", (e) => e.stopPropagation());
-	return collapsible(card, `plugin:${c.plugin}`);
+	return collapsible(card, `plugin:${c.plugin}${c.id ? `:${c.id}` : ""}`);
 }
 
 // a live card (a meter) is sent as it changes, not when the next poll comes
@@ -186,7 +213,7 @@ function pillParts(id) {
 	if (p) return p;
 	const node = addPill(
 		`pg-${id}`,
-		`<div class="pg-tile"></div>
+		`<div class="pg-tile"><img class="pg-art hidden" alt="" draggable="false" /></div>
 		<div class="text-col"><div class="line-main"></div><div class="line-sub"></div></div>
 		<span class="pg-meters"></span>
 		<span class="pg-right"></span>
@@ -197,6 +224,7 @@ function pillParts(id) {
 	p = {
 		node,
 		tile: node.querySelector(".pg-tile"),
+		art: node.querySelector(".pg-art"),
 		main: node.querySelector(".line-main"),
 		sub: node.querySelector(".line-sub"),
 		meters: node.querySelector(".pg-meters"),
@@ -220,7 +248,16 @@ function setPill(pill) {
 	if (p.icon !== pill.icon) {
 		p.icon = pill.icon;
 		p.tile.innerHTML = li(pill.icon);
+		p.tile.append(p.art);
 	}
+	// ("keep": the same picture as before, not sent again)
+	if (pill.image !== "keep" && p.art.getAttribute("src") !== (pill.image || null)) {
+		if (pill.image) p.art.src = pill.image;
+		else p.art.removeAttribute("src");
+	}
+	const shown = pill.image === "keep" ? !!p.art.getAttribute("src") : !!pill.image;
+	p.art.classList.toggle("hidden", !shown);
+	p.tile.classList.toggle("has-art", shown);
 	p.node.classList.toggle("pg-big", pill.look === "big");
 	p.main.textContent = whenText(pill.title);
 	p.sub.textContent = whenText(pill.sub);
@@ -263,7 +300,7 @@ function setPluginRings(plugin, rings) {
 	for (const r of rings) {
 		const key = `pg-${plugin}-${r.id}`;
 		now.add(key);
-		if (!ringEls[key]) addRing(key, r.color, plugin, 45).el.dataset.name = `${plugin} · ${r.id}`;
+		if (!ringEls[key]) addRing(key, r.color, plugin, 45, r.start !== false).el.dataset.name = `${plugin} · ${r.id}`;
 		else {
 			ringEls[key].fg.setAttribute("stroke", r.color);
 			ringEls[key].el.dataset.color = r.color;

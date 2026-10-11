@@ -8,8 +8,7 @@ import { head } from "./head.js";
 import { initPluginUi, pluginCard, setRings, whenText } from "./pluginui.js";
 import { plugins } from "./plugins/index.js";
 import { addFromGitHub, askMoved } from "./repo.js";
-import { eyes } from "./plugins/eyes.js";
-import { soundLight } from "./plugins/sound-light.js";
+import { frame as facesFrame, event as faceEvent, setCursor as faceCursor } from "./faces.js";
 import { updateAudio } from "./sound.js";
 import {
 	FLOATS,
@@ -92,7 +91,7 @@ window.addEventListener(
 ); // no autoscroll
 
 const pill = document.getElementById("pill");
-// (the eyes are in plugins/eyes.js, the sound light in plugins/sound-light.js, and the sound they borrow in sound.js)
+// (the eyes and the sound light are faces of their plugins, see faces.js; the sound they borrow is in sound.js)
 
 
 
@@ -113,6 +112,27 @@ function playEnter(container) {
 let currentView = "idle";
 
 
+let lastCursor = { x: 0, y: 0 };
+// what the faces are told of the island: its size, where it is in the window, how round its corners are
+const shape = { w: 0, h: 0, r: 0, x: 0, y: 0, pad: 0 };
+let shapeKey = "";
+function islandShape() {
+	const r = pill.getBoundingClientRect();
+	const w = pill.offsetWidth;
+	const h = pill.offsetHeight;
+	const key = `${w}x${h}`;
+	if (key !== shapeKey) {
+		shapeKey = key;
+		shape.r = parseFloat(getComputedStyle(pill).borderTopLeftRadius) || 0;
+	}
+	shape.w = w;
+	shape.h = h;
+	shape.x = r.left;
+	shape.y = r.top;
+	shape.pad = cursorPad;
+	return shape;
+}
+
 let lastFrameT = performance.now();
 function frame(now) {
 	// one bad frame must never kill the loop (the eyes would freeze/vanish for good)
@@ -124,8 +144,7 @@ function frame(now) {
 		lastFrameT = now;
 		updateCall(now);
 		updateAudio(now, dt);
-		soundLight.frame(now, dt);
-		eyes.frame(now);
+		facesFrame(now, dt, islandShape());
 	} catch (err) {
 		console.error(err);
 	}
@@ -136,6 +155,7 @@ if (!FLOATS) requestAnimationFrame(frame);
 listen("view-tick", (event) => {
 	currentView = event.payload;
 	view.name = currentView;
+	faceEvent("view", currentView);
 	for (const [id, node] of pills) node.classList.toggle("hidden", currentView !== id);
 	notifEl.classList.toggle(
 		"hidden",
@@ -161,17 +181,8 @@ listen("view-tick", (event) => {
 		brief: briefEl,
 	}[currentView] || pills.get(currentView);
 	if (enterTarget) playEnter(enterTarget);
-	if (currentView !== "idle") {
-		// the canvas stops repainting once a view takes over -- clear its last
-		// frame so stale eye pixels don't linger visible through any gaps
-		eyes.clearFace();
-	}
 	if (currentView === "hub") {
-		// hub-eyes was `display:none` (0x0) at the one point page-load sizing
-		// ran, and toggling a CSS class doesn't fire a `resize` event to catch
-		// it later -- size it explicitly now that it's actually visible
-		eyes.sizeHub();
-		eyes.mood.happyUntil = performance.now() + 1600; // happy to see you
+		faceEvent("hub-open");
 		// left-click opens the info pane; the tray's Settings item asks for settings
 		setHubPane(pendingSettingsPane ? "settings" : "info");
 		pendingSettingsPane = false;
@@ -242,7 +253,6 @@ listen("cursor-tick", (event) => {
 	const pad = event.payload.pad || 0;
 	if (pad !== cursorPad) {
 		cursorPad = pad;
-		soundLight.setCursorPad(pad);
 		document.documentElement.style.setProperty(
 			"--pad",
 			`${pad}px`,
@@ -263,7 +273,11 @@ listen("cursor-tick", (event) => {
 		rs.setProperty("--pill-h", event.payload.pill_h);
 	}
 	const { local_x, local_y } = event.payload;
-	const { dx, dy, speed } = eyes.cursor(local_x, local_y);
+	// how far the cursor went since the last time it was told (the faces squash and stretch by it)
+	const dx = local_x - lastCursor.x;
+	const dy = local_y - lastCursor.y;
+	lastCursor = { x: local_x, y: local_y };
+	const speed = Math.hypot(dx, dy);
 	if (islandShown !== !!event.payload.shown) {
 		islandShown = !!event.payload.shown;
 		pill.classList.toggle("hiding", !islandShown);
@@ -282,18 +296,13 @@ listen("cursor-tick", (event) => {
 		}
 		updateBg();
 	}
-	eyes.track(
-		local_x,
-		local_y,
-		dx,
-		dy,
-		speed,
+	const over =
 		!!event.payload.shown &&
-			local_x >= cursorPad &&
-			local_x <= window.innerWidth - cursorPad &&
-			local_y >= cursorPad &&
-			local_y <= window.innerHeight - cursorPad,
-	);
+		local_x >= cursorPad &&
+		local_x <= window.innerWidth - cursorPad &&
+		local_y >= cursorPad &&
+		local_y <= window.innerHeight - cursorPad;
+	faceCursor({ x: local_x, y: local_y, dx, dy, speed, hover: over });
 });
 
 // -- drag to move (native OS move, not a JS-computed one -- cheaper and
@@ -480,7 +489,7 @@ pill.addEventListener("contextmenu", (e) => {
 });
 const lockBadge = document.getElementById("lock-badge");
 listen("pin-tick", (event) => {
-	eyes.mood.happyUntil = performance.now() + 900; // a little happy blip either way
+	faceEvent("blip"); // a little happy blip either way
 	// a lock (pinned) or an open lock (unpinned) pops up at the centre of the island
 	const pinned = !!event.payload;
 	lockBadge.innerHTML = li(pinned ? "lock" : "unlock");
@@ -494,7 +503,7 @@ pill.addEventListener("mousedown", (e) => {
 	if (e.button !== 0) return;
 	// the open hub is a panel to work in: only its head (the eyes) takes the click that closes it
 	if (currentView === "hub" && !e.target.closest("#hub-head, #hub-foot")) return;
-	eyes.mood.wideUntil = performance.now() + 320; // boop!
+	faceEvent("boop");
 	invoke("drag_start");
 });
 // No mouseup/drag_end handler: `start_dragging()`'s native OS move-loop can

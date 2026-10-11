@@ -46,6 +46,22 @@ function draw(box, blocks, plugin, where) {
 			line.append(bar);
 			if (b.text) line.append(el("span", null, ` ${b.text}`));
 			box.append(line);
+		} else if (b.bars) {
+			// (in a tooltip they are wide, with the number at the right; in a widget they are the thin stacked bars)
+			const wide = box.classList.contains("sf-tip");
+			const list = el("div", wide ? "sf-meters" : "sm-bars");
+			for (const x of b.bars) {
+				const row = el("div", wide ? "sf-meter" : "sm-row");
+				const track = el("i");
+				const fill = el("u");
+				fill.style.width = `${Math.round(x.part * 100)}%`;
+				fill.style.background = x.color;
+				track.append(fill);
+				row.append(el("b", null, x.label), track);
+				if (wide) row.append(el("span", null, x.text));
+				list.append(row);
+			}
+			box.append(list);
 		} else if (b.head != null) {
 			const row = el("div", "sf-head");
 			const mk = (cls, id, label, d) => {
@@ -122,12 +138,31 @@ function draw(box, blocks, plugin, where) {
 
 // ------------------------------------------------------------------------------------------------------- widgets
 
+/** the same bars as before, only their numbers changed: they move to them (a fresh drawing would jump) */
+function moveBars(node, blocks) {
+	const have = node.querySelector(".sm-bars");
+	const want = blocks.length === 1 && blocks[0].bars;
+	if (!have || !want || have.children.length !== want.length) return false;
+	want.forEach((x, i) => {
+		const row = have.children[i];
+		if (row.firstChild.textContent !== x.label) return;
+		const fill = row.querySelector("u");
+		fill.style.width = `${Math.round(x.part * 100)}%`;
+		fill.style.background = x.color;
+	});
+	return true;
+}
+
 function paint(plugin, id) {
 	const node = widgetEls.get(`${plugin}:${id}`);
 	if (!node) return;
 	const w = state.get(plugin)?.widgets?.[id];
-	draw(node, w?.blocks || [], plugin, "widget");
+	const blocks = w?.blocks || [];
+	// (a clock is a button with a hover of its own; anything else is plain)
+	node.className = blocks.some((b) => b.clock) ? "hw-clock" : "hw-surface";
+	if (!moveBars(node, blocks)) draw(node, blocks, plugin, "widget");
 	node._tip = w?.tip || [];
+	host.refreshTip(node);
 }
 
 function register(plugin, spec) {

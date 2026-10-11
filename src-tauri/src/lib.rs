@@ -5,6 +5,8 @@ mod calendar;
 mod exeinfo;
 mod floats;
 mod modal;
+mod notifysensor;
+mod pluginrun;
 mod repo;
 mod focus;
 mod formats;
@@ -159,6 +161,11 @@ pub(crate) struct IslandState {
     /// what is playing, as a module may see it (no pictures), and a count that moves when it changes
     pub(crate) media_seen: std::sync::Mutex<serde_json::Value>,
     pub(crate) media_seq: std::sync::atomic::AtomicU64,
+    /// what other apps notified, for the plugins that may see it (see `notifysensor.rs`), and the count of them
+    pub(crate) toasts: std::sync::Mutex<Vec<serde_json::Value>>,
+    pub(crate) toast_seq: std::sync::atomic::AtomicU64,
+    /// the cover pictures of what is playing, by player, with an id of each (for a module that may see them)
+    pub(crate) media_arts: std::sync::Mutex<std::collections::HashMap<String, (u64, String)>>,
     pub(crate) notif: std::sync::Mutex<notify::NotifState>,
     /// the plugins (see plugins.rs)
     pub(crate) plugins: plugins::Host,
@@ -239,6 +246,9 @@ impl Default for IslandState {
             has_media: AtomicBool::new(false),
             media_seen: std::sync::Mutex::new(serde_json::Value::Null),
             media_seq: std::sync::atomic::AtomicU64::new(0),
+            toasts: std::sync::Mutex::new(Vec::new()),
+            toast_seq: std::sync::atomic::AtomicU64::new(0),
+            media_arts: std::sync::Mutex::new(std::collections::HashMap::new()),
             notif: std::sync::Mutex::new(notify::NotifState::default()),
             plugins: plugins::Host::default(),
             hub_open: AtomicBool::new(false),
@@ -326,10 +336,12 @@ fn push_notification(window: WebviewWindow, title: String, body: String) {
 /// A banner (or history row) was clicked: run its action and drop the banner.
 #[tauri::command]
 fn open_notification_action(window: WebviewWindow, action: String) {
-    match action.as_str() {
-        "viber" => builtin::toasts::open_viber(),
-        "discord" => focus::focus_or_open("discord.exe", windows::core::w!("discord://")),
-        _ => {}
+    // ("open:<address>": a banner of a plugin that may open that address)
+    if let Some(url) = action.strip_prefix("open:") {
+        let state = window.state::<Arc<IslandState>>();
+        if state.plugins.may_open(url) {
+            winutil::open_url(url);
+        }
     }
     window.state::<Arc<IslandState>>().notif.lock().unwrap().dismiss_current();
 }
@@ -1088,9 +1100,9 @@ pub fn run() {
     tauri::Builder::default()
         .manage(Arc::new(IslandState::default()))
         .invoke_handler(tauri::generate_handler![
-            builtin::look::look_state,
             plugins::plugin_list,
             plugins::plugin_surface,
+            plugins::plugin_face,
             plugins::plugin_moved_done,
             plugins::plugin_set,
             head::head_layout_get,
@@ -1185,6 +1197,7 @@ pub fn run() {
             audio::spawn(app.handle().clone(), window.state::<Arc<IslandState>>().inner().clone());
     floats::spawn(app.handle().clone(), window.state::<Arc<IslandState>>().inner().clone());
     plugins::spawn(app.handle().clone(), window.state::<Arc<IslandState>>().inner().clone());
+    notifysensor::spawn(window.state::<Arc<IslandState>>().inner().clone());
     // screenshot aid: `DI_OPEN_SETTINGS=1` opens the hub on its settings pane shortly after launch
     if std::env::var_os("DI_OPEN_SETTINGS").is_some() {
         let w = window.clone();

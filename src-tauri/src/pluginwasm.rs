@@ -164,15 +164,27 @@ fn now_ms() -> u64 {
 }
 
 /// The programs that have a window, the one in front first (the titles only for a module that may read them).
-fn windows_now(titles: bool) -> Value {
+fn windows_now(titles: bool, programs: bool, icons_sent: &mut std::collections::HashSet<String>) -> Value {
     let front = crate::winutil::foreground();
-    let mut list: Vec<(bool, Value)> = crate::scan::visible_windows()
+    let mut list: Vec<(bool, Value)> = crate::scan::visible_windows_with(titles)
         .into_iter()
         .filter(|w| !w.minimized)
         .map(|w| {
             let exe = std::path::Path::new(&w.exe).file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
             let is_front = w.hwnd.0 as isize == front;
-            (is_front, json!({ "exe": exe, "pid": w.pid, "title": if titles { w.title } else { String::new() }, "front": is_front }))
+            let mut v = json!({ "exe": exe, "pid": w.pid, "title": if titles { w.title.clone() } else { String::new() }, "front": is_front, "id": w.hwnd.0 as isize, "w": w.w, "h": w.h, "tool": w.tool });
+            if programs {
+                // (the path and the name; the icon only the first time, it is the same each time after)
+                let info = crate::exeinfo::lookup(&w.exe);
+                v["path"] = json!(w.exe);
+                v["name"] = json!(info.name.unwrap_or_default());
+                if let Some(icon) = info.icon {
+                    if icons_sent.insert(w.exe.clone()) {
+                        v["icon"] = json!(icon);
+                    }
+                }
+            }
+            (is_front, v)
         })
         .collect();
     list.sort_by_key(|(f, _)| !*f); // (stable: the rest keep their order)
@@ -229,6 +241,12 @@ struct Slot {
     files: HashMap<PathBuf, SystemTime>,
     said: HashMap<String, Instant>,
     last_say: Instant,
+    /// which cover picture each player has been told of (a picture is told once)
+    art_sent: HashMap<String, u64>,
+    /// the last toast this module was told of
+    toast_seen: u64,
+    /// the programs whose icon this module has been told of
+    icons_sent: std::collections::HashSet<String>,
 }
 
 fn load_slot(p: &Arc<Plugin>) -> Result<Slot, String> {
@@ -251,6 +269,9 @@ fn load_slot(p: &Arc<Plugin>) -> Result<Slot, String> {
         files: HashMap::new(),
         said: HashMap::new(),
         last_say: long_ago,
+        art_sent: HashMap::new(),
+        toast_seen: u64::MAX,
+        icons_sent: std::collections::HashSet::new(),
     })
 }
 
@@ -274,7 +295,9 @@ fn due_events(p: &Plugin, slot: &mut Slot, values: &Value, state: &IslandState) 
     let mut out: Vec<(Value, bool)> = Vec::new();
     if !slot.started {
         slot.started = true;
-        out.push((event("start", values, json!({})), false));
+        // (what it kept comes with the start)
+        let extra = if perms.storage { json!({ "store": crate::pluginrun::store_of(&p.manifest.id) }) } else { json!({}) };
+        out.push((event("start", values, extra), false));
     }
     if perms.audio {
         let seq = bus.seq.load(Ordering::Relaxed);
@@ -289,7 +312,11 @@ fn due_events(p: &Plugin, slot: &mut Slot, values: &Value, state: &IslandState) 
     }
     if perms.processes && slot.last_proc.elapsed() >= PROCESSES_EVERY {
         slot.last_proc = Instant::now();
-        out.push((event("processes", values, json!({ "windows": windows_now(perms.titles) })), false));
+        let mut extra = json!({ "windows": windows_now(perms.titles, perms.programs, &mut slot.icons_sent) });
+        if perms.idle {
+            extra["idle_s"] = json!(crate::winutil::idle_seconds().unwrap_or(0.0));
+        }
+        out.push((event("processes", values, extra), false));
     }
     if perms.calendar {
         // (when the calendar changed, and again each minute: what has finished drops out of the list)
@@ -308,15 +335,53 @@ fn due_events(p: &Plugin, slot: &mut Slot, values: &Value, state: &IslandState) 
         let seq = state.media_seq.load(Ordering::Relaxed);
         if slot.media_seq != Some(seq) {
             slot.media_seq = Some(seq);
-            let sessions = state.media_seen.lock().unwrap().clone();
-            let sessions = if sessions.is_null() { json!([]) } else { sessions };
+            let mut sessions = state.media_seen.lock().unwrap().clone();
+            if sessions.is_null() {
+                sessions = json!([]);
+            }
+            // (the pictures: each told once, to a module that may see them)
+            if perms.media_art {
+                let arts = state.media_arts.lock().unwrap();
+                if let Some(list) = sessions.as_array_mut() {
+                    for s in list.iter_mut() {
+                        let source = s["source"].as_str().unwrap_or("").to_string();
+                        let id = s["art_id"].as_u64().unwrap_or(0);
+                        if id != 0 && slot.art_sent.get(&source) != Some(&id) {
+                            if let Some((aid, art)) = arts.get(&source) {
+                                if *aid == id {
+                                    s["art"] = json!(art);
+                                    slot.art_sent.insert(source, id);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             out.push((event("media", values, json!({ "sessions": sessions })), false));
+        }
+    }
+    // what the commands it asked for printed
+    {
+        let done: Vec<Value> = std::mem::take(&mut *p.results.lock().unwrap());
+        for r in done {
+            out.push((event("command", values, json!({ "id": r["id"], "code": r["code"], "stdout": r["stdout"] })), false));
+        }
+    }
+    if perms.notifications {
+        // (what other apps notified since this module last heard)
+        if slot.toast_seen == u64::MAX {
+            slot.toast_seen = state.toast_seq.load(Ordering::Relaxed); // (what was there before it started is not news)
+        }
+        let fresh: Vec<Value> = state.toasts.lock().unwrap().iter().filter(|t| t["seq"].as_u64().unwrap_or(0) > slot.toast_seen).cloned().collect();
+        if let Some(last) = fresh.last() {
+            slot.toast_seen = last["seq"].as_u64().unwrap_or(slot.toast_seen);
+            out.push((event("notifications", values, json!({ "notifications": fresh })), false));
         }
     }
     if perms.system && slot.last_sys.elapsed() >= SYSTEM_EVERY {
         slot.last_sys = Instant::now();
         let s = crate::stats::read(state);
-        out.push((event("system", values, json!({ "system": { "cpu": s.cpu_pct, "ram": s.ram_pct, "ram_used_gb": s.ram_used_gb, "ram_total_gb": s.ram_total_gb } })), false));
+        out.push((event("system", values, json!({ "system": { "cpu": s.cpu_pct, "ram": s.ram_pct, "ram_used_gb": s.ram_used_gb, "ram_total_gb": s.ram_total_gb, "gpu": crate::gpu::pct(state) } })), false));
     }
     let tick_due = !p.manifest.tick.trim().is_empty() && slot.last_tick.elapsed() >= crate::plugins::parse_every(&p.manifest.tick);
     let wake_due = slot.wake_at.map_or(false, |t| Instant::now() >= t);
@@ -339,6 +404,11 @@ fn due_events(p: &Plugin, slot: &mut Slot, values: &Value, state: &IslandState) 
     let pressed: Vec<(String, Value)> = p.actions.lock().unwrap().drain(..).collect();
     for (action, args) in pressed {
         out.push((event("action", values, json!({ "action": action, "args": args })), true));
+    }
+    // (whether the expanded island is open goes with every event)
+    let hub = state.hub_is_open();
+    for (e, _) in out.iter_mut() {
+        e["hub"] = json!(hub);
     }
     out
 }

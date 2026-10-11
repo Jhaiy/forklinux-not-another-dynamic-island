@@ -91,6 +91,16 @@ pub fn clip_to(hwnd: isize, rects: &[[f64; 4]], pad: f64) {
     }
 }
 
+/// Open an address in the program that handles it (a web page, `viber://chats`, `discord://`).
+pub fn open_url(url: &str) {
+    use windows::core::HSTRING;
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
+    unsafe {
+        ShellExecuteW(None, windows::core::w!("open"), &HSTRING::from(url), None, None, SW_SHOWNORMAL);
+    }
+}
+
 /// Put the window back on top of the topmost band, without moving, sizing or activating it.
 /// `SetWindowPos` with `SWP_NOZORDER` (see `place`) never changes the stacking, so a window
 /// that another topmost window (or the taskbar, a popup...) covered would stay covered.
