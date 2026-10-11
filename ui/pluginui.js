@@ -263,7 +263,7 @@ function setPluginRings(plugin, rings) {
 	for (const r of rings) {
 		const key = `pg-${plugin}-${r.id}`;
 		now.add(key);
-		if (!ringEls[key]) addRing(key, r.color);
+		if (!ringEls[key]) addRing(key, r.color, plugin, 45).el.dataset.name = `${plugin} · ${r.id}`;
 		else {
 			ringEls[key].fg.setAttribute("stroke", r.color);
 			ringEls[key].el.dataset.color = r.color;

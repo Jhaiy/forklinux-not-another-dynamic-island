@@ -2,7 +2,8 @@
 // how much of the Claude limits is used (the 5-hour and the 7-day ones) with the peek that comes when one moves: the bars
 // sit at the old value, then fill to the new one once the island has landed.
 // A session that needs you leads, then the ones that finished, then the others.
-import { FLOATS, LLM_COLOR, LLM_LETTER, LLM_RING_C, addPill, addRing, call, collapsible, el, focusable, formatDuration, host, invoke, li, listen, llmCtxColor, llmStateIcon, ringEls, setRing } from "../kit.js";
+import { head } from "../head.js";
+import { FLOATS, tipRows, LLM_COLOR, LLM_LETTER, LLM_RING_C, addPill, addRing, call, collapsible, el, focusable, formatDuration, host, invoke, li, listen, llmCtxColor, llmStateIcon, ringEls, setRing } from "../kit.js";
 
 // ---- LLM sessions (Claude Code): one card per session. Needs you > finished > the others. ----
 const formatTokens = (n) =>
@@ -158,7 +159,67 @@ function formatReset(iso) {
 	return `${days}d ${hours % 24}h`;
 }
 
+// ---- the bars: both windows in one widget of the head (the rings are the same numbers, one each, in the tray) ----
+// (key, the label of its bar, its name in the tooltip, its colour)
+const WINDOWS = [
+	["five_hour", "5H", "5-hour", "#D97757"],
+	["seven_day", "7D", "7-day", "#E8D5B5"],
+];
+const SAMPLE_USAGE = { five_hour: { pct: 42 }, seven_day: { pct: 18 } };
+let usageBars = null;
+let lastUsage = null;
+
+function makeUsageBars() {
+	const box = el("div", "cu-bars");
+	for (const [key, label] of WINDOWS) {
+		const row = el("div", "cu-row");
+		row.dataset.key = key;
+		const track = el("i");
+		track.append(el("u"));
+		row.append(el("b", null, label), track);
+		box.append(row);
+	}
+	return box;
+}
+
+/** the numbers on a set of bars; a full window says when it is back where its number was */
+function paintUsageBars(box, u) {
+	let any = false;
+	for (const [key, , , color] of WINDOWS) {
+		const row = box.querySelector(`[data-key="${key}"]`);
+		const w = u?.[key];
+		const here = !!(w && w.pct != null);
+		row.classList.toggle("none", !here);
+		if (!here) continue;
+		any = true;
+		const full = w.pct >= 100;
+		const fill = row.querySelector("u");
+		fill.style.width = `${Math.max(0, Math.min(100, w.pct))}%`;
+		fill.style.background = full ? "#E5675C" : w.pct >= 80 ? "#E6A15A" : color;
+	}
+	return any;
+}
+
+/** the tooltip of the bars: a row for each window, with its bar and when it comes back */
+function usageTip() {
+	const u = lastUsage;
+	const rows = [];
+	for (const [key, , label, color] of WINDOWS) {
+		const w = u?.[key];
+		if (!w || w.pct == null) continue;
+		const reset = formatReset(w.resets_at);
+		rows.push({ label, value: `${Math.round(w.pct)}%`, pct: w.pct, color: w.pct >= 100 ? "#E5675C" : w.pct >= 80 ? "#E6A15A" : color, note: reset ? `Back in ${reset}` : null });
+	}
+	return tipRows(rows, { title: "Claude usage", foot: u?.error ? `Not up to date: ${u.error}` : "Click to refresh" });
+}
+
 function applyUsage(u) {
+	lastUsage = u;
+	if (usageBars) {
+		const ok = !!(u && u.available) && paintUsageBars(usageBars, u);
+		head.setHidden("claude-code:bars", !ok);
+		if (ok) host.refreshTip(usageBars);
+	}
 	const windows = [
 		["five_hour", "5h", u?.five_hour],
 		["seven_day", "7d", u?.seven_day],
@@ -219,8 +280,31 @@ export default {
 	id: "claude-code",
 	init() {
 		// the rings: hidden until there is something to show (no Claude Code login, no rings)
-		addRing("seven_day", "#E8963C");
-		addRing("five_hour", "#E8963C");
+		if (!FLOATS) {
+			usageBars = makeUsageBars();
+			host.setTip(usageBars, usageTip);
+			usageBars.addEventListener("click", () => call("claude-code", "usage_refresh"));
+			head.register({
+				id: "claude-code:bars",
+				plugin: "claude-code",
+				name: "Bars",
+				place: "right",
+				rank: 40,
+				width: 68,
+				interactive: true,
+				start: true,
+				preview: () => {
+					const pic = makeUsageBars();
+					paintUsageBars(pic, lastUsage?.available ? lastUsage : SAMPLE_USAGE);
+					return pic;
+				},
+				build: () => usageBars,
+			});
+			// (it takes no room until there is something to show: no Claude Code login, no bars)
+			head.setHidden("claude-code:bars", true);
+		}
+		addRing("seven_day", "#E8963C", "claude-code", 43, false).el.dataset.name = "Claude 7-day ring";
+		addRing("five_hour", "#E8963C", "claude-code", 42, false).el.dataset.name = "Claude 5-hour ring";
 		for (const key of ["five_hour", "seven_day"]) ringEls[key].el.addEventListener("click", () => call("claude-code", "usage_refresh"));
 		listen("usage-tick", (event) => applyUsage(event.payload));
 		if (FLOATS) return;

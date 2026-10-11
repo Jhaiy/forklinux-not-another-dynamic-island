@@ -1,0 +1,12 @@
+{
+  "id": "system-meters",
+  "name": "System meters",
+  "description": "Rings in the head of the expanded island for how busy the CPU, the memory and the graphics card are.",
+  "version": "1.0.0",
+  "default_on": false,
+  "permissions": {
+    "sees": [
+      { "name": "performance" }
+    ]
+  }
+}

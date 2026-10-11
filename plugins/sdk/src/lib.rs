@@ -47,7 +47,8 @@ pub struct Event {
     /// `event == "system"`, with the `system` permission (every 2 s)
     pub system: Option<System>,
     /// `event == "action"`: the `action` of the button that was pressed (on a card, a pill or in the plugin's settings),
-    /// and what the button sent with it
+    /// and what the button sent with it. A button of the plugin's [`Modal`] is the action "modal", with `args` =
+    /// `{ "button", "values", "closed" }`.
     pub action: String,
     pub args: Value,
     /// `event == "tick"`: the module's own `wake_in` came due (otherwise it is the manifest's `tick`)
@@ -475,6 +476,108 @@ impl CalEvent {
     }
 }
 
+// ------------------------------------------------------------------------------------------------ a window of its own
+
+/// A small window the island opens for the plugin: you can move it, and it says whose it is. The module describes it (words,
+/// a field, a few choices, up to three buttons) and the island draws it. A button that was pressed comes back as an `action`
+/// event with `action == "modal"` and `args` = `{ "button": id, "values": { name: what it held }, "closed": bool }`. A button made
+/// with [`Modal::stay`] keeps the window open for the module to answer with the next step (a reply with `Reply::modal` again
+/// replaces the window); any other button closes it. A module has one at a time.
+#[derive(Default, Clone, Debug)]
+pub struct Modal {
+    title: String,
+    width: Option<u32>,
+    at: Option<Value>,
+    busy: String,
+    blocks: Vec<Value>,
+    buttons: Vec<Value>,
+}
+
+impl Modal {
+    pub fn new(title: impl Into<String>) -> Self {
+        Modal { title: title.into(), ..Modal::default() }
+    }
+    /// 280 to 520 px
+    pub fn width(mut self, px: u32) -> Self {
+        self.width = Some(px);
+        self
+    }
+    /// Where it opens the first time: "center" (the default), "island", "cursor", an edge or a corner ("top", "bottom-right"...).
+    /// After you have moved it, it opens where you left it.
+    pub fn at(mut self, place: impl Into<String>) -> Self {
+        self.at = Some(Value::String(place.into()));
+        self
+    }
+    /// Where its middle goes, as a part of the screen it opens on (0 to 1 each way).
+    pub fn at_part(mut self, x: f64, y: f64) -> Self {
+        self.at = Some(json!({ "x": x, "y": y }));
+        self
+    }
+    /// A line to say while something is being done (the buttons wait).
+    pub fn busy(mut self, text: impl Into<String>) -> Self {
+        self.busy = text.into();
+        self
+    }
+    /// a paragraph
+    pub fn text(mut self, t: impl Into<String>) -> Self {
+        self.blocks.push(json!({ "text": t.into() }));
+        self
+    }
+    /// a heading, "muted", "note" or "warn": a paragraph of that kind
+    pub fn text_of(mut self, kind: &str, t: impl Into<String>) -> Self {
+        self.blocks.push(json!({ "text": t.into(), "kind": kind }));
+        self
+    }
+    /// a title and what it means, under it, for each (what a thing may see, what a word means)
+    pub fn facts(mut self, items: &[(&str, &str)]) -> Self {
+        self.blocks.push(json!({ "facts": items.iter().map(|(t, x)| json!({ "title": t, "text": x })).collect::<Vec<_>>() }));
+        self
+    }
+    /// one line of text; what it holds comes back in `values[name]`
+    pub fn field(mut self, name: &str, value: &str, placeholder: &str) -> Self {
+        self.blocks.push(json!({ "field": name, "value": value, "placeholder": placeholder }));
+        self
+    }
+    /// a few options, one picked (`values[name]` is its id)
+    pub fn choice(mut self, name: &str, options: &[(&str, &str)], picked: &str) -> Self {
+        self.blocks.push(json!({ "choice": name, "options": options.iter().map(|(i, l)| json!({ "id": i, "label": l })).collect::<Vec<_>>(), "value": picked }));
+        self
+    }
+    /// a list of rows (id, label, a note at the right), one picked (`values[name]` is its id)
+    pub fn list(mut self, name: &str, rows: &[(&str, &str, &str)], picked: &str) -> Self {
+        self.blocks.push(json!({ "list": name, "items": rows.iter().map(|(i, l, s)| json!({ "id": i, "label": l, "sub": s })).collect::<Vec<_>>(), "value": picked }));
+        self
+    }
+    /// a bar: 0 to 1, or `None` for one that is moving, with a line under it
+    pub fn progress(mut self, part: Option<f32>, text: &str) -> Self {
+        self.blocks.push(json!({ "progress": part, "text": text }));
+        self
+    }
+    /// a button (at most three): pressing it closes the window
+    pub fn button(mut self, id: &str, label: &str) -> Self {
+        self.buttons.push(json!({ "id": id, "label": label }));
+        self
+    }
+    /// the main button
+    pub fn primary(mut self, id: &str, label: &str) -> Self {
+        self.buttons.push(json!({ "id": id, "label": label, "primary": true }));
+        self
+    }
+    /// a button that asks for care (it deletes, it resets)
+    pub fn danger(mut self, id: &str, label: &str) -> Self {
+        self.buttons.push(json!({ "id": id, "label": label, "danger": true }));
+        self
+    }
+    /// a button that leaves the window open: the module answers with the next step
+    pub fn stay(mut self, id: &str, label: &str, primary: bool) -> Self {
+        self.buttons.push(json!({ "id": id, "label": label, "primary": primary, "stay": true }));
+        self
+    }
+    fn to_json(&self) -> Value {
+        json!({ "title": self.title, "width": self.width, "at": self.at.clone().unwrap_or(Value::Null), "busy": self.busy, "blocks": self.blocks, "buttons": self.buttons })
+    }
+}
+
 /// What a call answers. Everything is optional: what a reply does not mention stays as it was.
 #[derive(Default, Clone, Debug)]
 pub struct Reply {
@@ -487,9 +590,23 @@ pub struct Reply {
     note: Option<Option<String>>,
     wake_ms: Option<u64>,
     media: Option<(String, String)>,
+    modal: Option<Option<Modal>>,
 }
 
 impl Reply {
+    /// Open a window for the plugin (or show the next step of the one it has). See [`Modal`].
+    pub fn modal(m: Modal) -> Self {
+        Reply { modal: Some(Some(m)), ..Reply::default() }
+    }
+    /// also open this window
+    pub fn with_modal(mut self, m: Modal) -> Self {
+        self.modal = Some(Some(m));
+        self
+    }
+    /// close the window it has open
+    pub fn close_modal() -> Self {
+        Reply { modal: Some(None), ..Reply::default() }
+    }
     /// nothing new: the island keeps what it shows
     pub fn nothing() -> Self {
         Reply::default()
@@ -629,6 +746,15 @@ impl Reply {
             }
             Some(None) => {
                 o.insert("note".into(), Value::Null);
+            }
+            None => {}
+        }
+        match &self.modal {
+            Some(Some(m)) => {
+                o.insert("modal".into(), m.to_json());
+            }
+            Some(None) => {
+                o.insert("modal".into(), Value::Null);
             }
             None => {}
         }

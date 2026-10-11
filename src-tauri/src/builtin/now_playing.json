@@ -3,7 +3,7 @@
   "name": "Now playing",
   "description": "A pill and a card for what is playing, with play, skip, seek and speed.",
   "version": "1.0.0",
-  "default_on": true,
+  "default_on": false,
   "permissions": {
     "sees": [
       { "name": "media" },

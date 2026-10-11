@@ -25,7 +25,7 @@ It is Windows-only for now. The goal is to stay light: it should never make the 
 - **Page reader.** The island knows what kind of page you are on (walkthrough, wiki article, news
   article, video, recipe, Q&A thread, API reference, product page, search results, web app such as a pull
   request) and says what matters for that kind: how many steps a guide has, the sections of an article, the
-  answers on a question, a post with its comments, as a card in the expanded island (the collapsed island
+  answers on a question, as a card in the expanded island (the collapsed island
   shows nothing of it). Where you are on the page is not followed. It
   needs the browser extension ([nadi-chrome](https://github.com/Llyme/nadi-chrome), Chrome, Edge, Brave, Opera,
   Vivaldi): the page describes itself (its metadata, headings, comments), exactly, and costs the
@@ -42,9 +42,20 @@ It is Windows-only for now. The goal is to stay light: it should never make the 
   the sign-in is the plugin's own, kept encrypted for your Windows user, and the rings keep working whether or not Claude
   Code is running. Without the sign-in there are no rings: Claude Code's own login file is never read.
 - **Notifications.** Captures the notifications of all apps.
-- **Calendar.** A month view in the hub, which belongs to the island. The events come from plugins: the *ICS Calendar*
-  plugin reads a calendar link (Google Calendar, Outlook, iCloud), shows what is next, and says so shortly before it starts;
-  a module can bring events too.
+- **Calendar.** A plugin. The date at the left of the head opens a month view in place of the cards (press it again to go
+  back). The *Calendar* plugin reads a calendar link (Google Calendar, Outlook, iCloud), shows what is next, and says so
+  shortly before it starts; a module can bring events too.
+- **The head.** The top of the expanded island is rows of **widgets** that plugins bring: the eyes, the date and the time,
+  the CPU, memory and GPU as three thin bars, the Claude limits as two labelled bars (each also offered as rings). Every row has a left, a center and a right place (the center is always at
+  the dead center), and when the widgets do not fit the head grows another row. Edit mode (the pencil in the settings tabs) lets you
+  drag a widget to any place of any row at the top or at the bottom of the island, or off the island to put it back in the tray, which lists every
+  widget the plugins offer (it scrolls, folds by plugin and has a search). The place that a widget
+  gives up springs shut, and the others spring into it.
+- **A blank slate.** A new install has every plugin off; the expanded island says so and points to the plugin list.
+- **Modals.** Small windows the island opens (to ask before a plugin is switched on, to add plugins from a GitHub repository): move one
+  by its bar, and it snaps to the screen's edges and to other windows. Plugins can open them too, and the island says whose each one is.
+- **Plugins from GitHub.** `+` in the plugin list takes a repository link, shows every plugin in it and what it asks for, and installs the
+  ones you tick, switched off. One repository can hold as many as it likes.
 - **Hub.** The expanded panel. Every card starts collapsed and opens with a click on its header.
 - **Floating cards.** Drag a card out of the hub by its header and it becomes a card of its own on the screen:
   it lifts, tilts with your hand and snaps to screen edges and to other floating cards. Resize it from its
@@ -61,9 +72,9 @@ It is Windows-only for now. The goal is to stay light: it should never make the 
   is, the programs that have a window, the levels of the sound (never the sound) or a file that changed. It answers with
   a card, a **pill** on the collapsed island, **rings** in the hub, buttons, banners, events for the calendar. It has no
   network, a time budget for each call and a memory cap, and a module that keeps failing is switched off. The island draws
-  everything from a few building blocks, so a plugin cannot make it lag. The *Time* and *ICS Calendar*
+  everything from a few building blocks, so a plugin cannot make it lag. The *Time* and *Calendar*
   plugins that come with the app are written this way, and are carried by the app as any plugin could be; a few others
-  (games, work, the page reader, downloads, Claude Code, now playing, the notification mirror, the eyes, the sound light) are written in Rust,
+  (games, work, the page reader, downloads, Claude Code, now playing, the notification mirror, the eyes, the sound light, the system meters) are written in Rust,
   because they need what a sandbox must not hand out (the process list, performance counters, files and the login of other
   programs). Settings > Plugins lists them all the same way: what each one asks to see before you switch it on, its own
   settings, a mute for its banners, and Do not disturb. Banners wait by priority. Examples (weather, an audio meter, a
@@ -111,8 +122,8 @@ Debug aids, set as environment variables before starting the exe: `DI_OPEN_HUB=1
 - `src-tauri/src/` is the backend. `lib.rs` has the window state machine (reveal, hide, springs, resize);
   the core is `calendar` (the store of events), `media` and `audio` (the sensors), `notify`, `floats`, `stats`, `gpu`,
   `settings`, and `plugins`, `pluginwasm`, `native` and `bundled` (the plugin host). The plugins written in Rust are
-  in `builtin/` (`games`, `work`, `pages`, `downloads`, `claude_code`, `now_playing`, `toasts`, `eyes`, `sound_light`) with their
-  faces in `ui/plugins/`; the ones the app carries as plugins are in `plugins/` (`time`, `ics-calendar`) and
+  in `builtin/` (`games`, `work`, `pages`, `downloads`, `claude_code`, `now_playing`, `toasts`, `eyes`, `sound_light`, `system_meters`) with their
+  faces in `ui/plugins/` (the head's rows and widgets are `ui/head.js`, and `head.rs` keeps how you arranged them); the ones the app carries as plugins are in `plugins/` (`time`, `ics-calendar`) and
   `src-tauri/plugins-bundled/`. What the island draws for any plugin is `ui/pluginui.js`; see [PLUGINS.md](PLUGINS.md).
 - `scripts/gen_icons.py` regenerates `src-tauri/icons/` (standard library only).
 - Settings are stored in `%APPDATA%\NADI\settings.json`, and what each plugin has (on or off, its settings) in

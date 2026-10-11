@@ -1070,7 +1070,7 @@ pub struct Offer {
     pub brief: bool,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone, Debug)]
 pub struct Perm {
     pub name: String,
     /// what it is of: the host, the file, the command
@@ -1165,6 +1165,8 @@ pub struct Info {
     pub error: Option<String>,
     /// a native plugin's line about how it is doing ("waiting for the browser extension")
     pub note: Option<String>,
+    /// the repository it was installed from, and the version of it ("Llyme/nadi-plugins v1.2.0": see `repo.rs`)
+    pub from: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1173,7 +1175,7 @@ pub struct Listing {
     pub dnd: bool,
 }
 
-fn dir() -> Option<PathBuf> {
+pub(crate) fn dir() -> Option<PathBuf> {
     Some(crate::settings::data_dir()?.join("plugins"))
 }
 
@@ -1181,7 +1183,7 @@ fn state_path() -> Option<PathBuf> {
     Some(crate::settings::data_dir()?.join("plugins.json"))
 }
 
-fn valid_id(id: &str) -> bool {
+pub(crate) fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 48 && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '.' | '-' | '_'))
 }
 
@@ -1318,6 +1320,13 @@ pub fn net_hosts(m: &Manifest, values: &Value) -> Vec<String> {
             }
         })
         .collect()
+}
+
+/// A plugin's folder, read and checked as it is when the app looks at its plugins folder (a folder of a repository that is
+/// being looked at, see `repo.rs`): its manifest, and what is wrong with it.
+pub(crate) fn inspect(folder: &std::path::Path) -> Option<(Manifest, Option<String>)> {
+    let p = read_one(&folder.join("manifest.json"))?;
+    Some((p.manifest, p.problem))
 }
 
 fn read_one(path: &std::path::Path) -> Option<Plugin> {
@@ -1546,6 +1555,7 @@ impl Host {
                     cost,
                     error: p.problem.clone().or_else(|| p.error.lock().unwrap().clone()),
                     note: if saved.on.contains(&m.id) { self.note_of(&m.id).or_else(|| p.note.lock().unwrap().clone()) } else { None },
+                    from: if p.bundled.is_some() || m.kind == "native" { None } else { crate::repo::source_of(&p.dir) },
                 }
             })
             .collect();
@@ -1620,6 +1630,9 @@ impl Host {
                     self.offers.lock().unwrap().remove(&id);
                 }
             }
+        }
+        if let Some(modal) = out.modal {
+            crate::modal::from_plugin(app, &p.manifest.id, &p.manifest.name, modal);
         }
         if let Some(rings) = out.rings {
             if *p.rings.lock().unwrap() != rings {
@@ -1798,6 +1811,8 @@ pub struct Out {
     pub wake_ms: Option<u64>,
     /// a button of the player, for a module that may control it: (what, which player)
     pub media: Option<(String, String)>,
+    /// a window for the plugin (see `modal.rs`): `Some(Null)` closes the one it has open
+    pub modal: Option<Value>,
 }
 
 /// the name the page gives a plugin's pill (`#pg-<id>`)
@@ -1848,6 +1863,9 @@ pub fn out_of(m: &Manifest, reply: &Value) -> Out {
     if let Some(n) = o.get("note") {
         out.note = Some(n.as_str().map(|t| t.trim().chars().take(MAX_TEXT).collect::<String>()).filter(|t| !t.is_empty()));
     }
+    if let Some(md) = o.get("modal") {
+        out.modal = if md.is_null() { Some(Value::Null) } else { clean_modal(md) };
+    }
     out.wake_ms = o.get("wake_ms").and_then(|v| v.as_u64()).map(|n| n.clamp(50, MAX_WAKE_MS));
     if let Some(mc) = o.get("media").and_then(|v| v.as_object()) {
         let s = |k: &str| mc.get(k).and_then(|v| v.as_str()).unwrap_or("").chars().take(200).collect::<String>();
@@ -1856,12 +1874,70 @@ pub fn out_of(m: &Manifest, reply: &Value) -> Out {
     out
 }
 
+/// A module's modal, kept to what the island draws for it: a few kinds of block, short texts, three buttons. What it cannot
+/// say it does not get: who it is (the island puts the plugin's name on the bar), where it is remembered, its icon.
+pub fn clean_modal(v: &Value) -> Option<Value> {
+    let o = v.as_object()?;
+    let s = |x: Option<&Value>, n: usize| x.and_then(|v| v.as_str()).unwrap_or("").chars().take(n).collect::<String>();
+    let mut blocks: Vec<Value> = Vec::new();
+    for b in o.get("blocks").and_then(|b| b.as_array()).map(|a| &a[..a.len().min(24)]).unwrap_or(&[]) {
+        let Some(b) = b.as_object() else { continue };
+        let one = if b.contains_key("text") {
+            let kind = s(b.get("kind"), 8);
+            json!({ "text": s(b.get("text"), 1200), "kind": if ["title", "muted", "note", "warn"].contains(&kind.as_str()) { kind } else { String::new() } })
+        } else if b.contains_key("facts") {
+            let items: Vec<Value> = b.get("facts").and_then(|f| f.as_array()).map(|a| a.iter().take(20).map(|f| json!({ "title": s(f.get("title"), 120), "text": s(f.get("text"), 400) })).collect()).unwrap_or_default();
+            json!({ "facts": items })
+        } else if b.contains_key("field") {
+            json!({ "field": s(b.get("field"), 40), "label": s(b.get("label"), 80), "value": s(b.get("value"), 400), "placeholder": s(b.get("placeholder"), 80), "focus": b.get("focus").and_then(|x| x.as_bool()).unwrap_or(false) })
+        } else if b.contains_key("choice") {
+            let opts: Vec<Value> = b.get("options").and_then(|f| f.as_array()).map(|a| a.iter().take(8).map(|o| json!({ "id": s(o.get("id"), 60), "label": s(o.get("label"), 40) })).collect()).unwrap_or_default();
+            json!({ "choice": s(b.get("choice"), 40), "options": opts, "value": s(b.get("value"), 60) })
+        } else if b.contains_key("list") {
+            let items: Vec<Value> = b.get("items").and_then(|f| f.as_array()).map(|a| a.iter().take(100).map(|i| json!({ "id": s(i.get("id"), 120), "label": s(i.get("label"), 120), "sub": s(i.get("sub"), 120) })).collect()).unwrap_or_default();
+            json!({ "list": s(b.get("list"), 40), "items": items, "value": s(b.get("value"), 120) })
+        } else if b.contains_key("progress") {
+            json!({ "progress": b.get("progress").and_then(|p| p.as_f64()).map(|p| p.clamp(0.0, 1.0)), "text": s(b.get("text"), 200) })
+        } else {
+            continue;
+        };
+        blocks.push(one);
+    }
+    let buttons: Vec<Value> = o
+        .get("buttons")
+        .and_then(|b| b.as_array())
+        .map(|a| {
+            a.iter()
+                .take(3)
+                .filter(|b| b.is_object())
+                .map(|b| {
+                    let flag = |k: &str| b.get(k).and_then(|x| x.as_bool()).unwrap_or(false);
+                    json!({ "id": s(b.get("id"), 40), "label": s(b.get("label"), 40), "primary": flag("primary"), "danger": flag("danger"), "stay": flag("stay") })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let at = match o.get("at") {
+        Some(Value::String(a)) => Value::String(a.chars().take(16).collect()),
+        Some(Value::Object(p)) => json!({ "x": p.get("x").and_then(|x| x.as_f64()).unwrap_or(0.5).clamp(0.0, 1.0), "y": p.get("y").and_then(|y| y.as_f64()).unwrap_or(0.5).clamp(0.0, 1.0) }),
+        _ => Value::Null,
+    };
+    Some(json!({
+        "title": s(o.get("title"), 80),
+        "width": o.get("width").and_then(|w| w.as_f64()).map(|w| w.clamp(280.0, 520.0)),
+        "at": at,
+        "busy": s(o.get("busy"), 120),
+        "blocks": blocks,
+        "buttons": buttons,
+    }))
+}
+
 /// The settings the manifest says must be filled in, and are not.
 fn missing(m: &Manifest, values: &Value) -> bool {
     m.needs.iter().any(|k| values.get(k).map_or(true, |v| text_of(v).trim().is_empty()))
 }
 
-fn has_card(m: &Manifest) -> bool {
+pub(crate) fn has_card(m: &Manifest) -> bool {
     !(m.card.title.trim().is_empty() && m.card.sub.trim().is_empty() && m.card.body.is_empty())
 }
 
@@ -1987,6 +2063,12 @@ pub fn plugin_set(window: tauri::WebviewWindow, id: String, on: bool) {
     let state = window.state::<Arc<IslandState>>();
     state.plugins.set(&id, on);
     sync_audio(&state);
+    // (a plugin that is switched off has no window open)
+    if !on {
+        crate::modal::from_plugin(window.app_handle(), &id, "", Value::Null);
+    }
+    // (the head's widgets are the plugins' that are on: it lays itself out again)
+    let _ = tauri::Emitter::emit(&window, "plugins-changed", ());
 }
 
 #[tauri::command]
@@ -2028,6 +2110,49 @@ pub fn plugin_folder() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_modules_modal_is_kept_to_what_the_island_draws() {
+        let m = Manifest { id: "x".into(), name: "X".into(), kind: "wasm".into(), ..Default::default() };
+        let reply = json!({
+            "modal": {
+                "title": "Hello",
+                "width": 9000,
+                "at": "top-right",
+                "owner": "The Island",
+                "icon": { "letter": "!" },
+                "remember": "something-else",
+                "blocks": [
+                    { "text": "A paragraph", "kind": "warn" },
+                    { "html": "<b>no</b>" },
+                    { "field": "city", "value": "Man", "placeholder": "a city" },
+                    { "checks": "pick", "items": [] },
+                    { "choice": "for", "options": [{ "id": "a", "label": "A" }], "value": "a" }
+                ],
+                "buttons": [
+                    { "id": "1", "label": "One" }, { "id": "2", "label": "Two", "primary": true },
+                    { "id": "3", "label": "Three", "danger": true }, { "id": "4", "label": "Four" }
+                ]
+            }
+        });
+        let out = out_of(&m, &reply);
+        let md = out.modal.expect("a modal");
+        assert_eq!(md["title"], "Hello");
+        // (the width stays in range; who it is, its icon and where it is kept are the island's to say, not the module's)
+        assert_eq!(md["width"], 520.0);
+        assert_eq!(md["at"], "top-right");
+        assert!(md.get("owner").is_none() && md.get("icon").is_none() && md.get("remember").is_none());
+        // (a block the island does not draw is left out; a card-style list of checks is not a module's)
+        let kinds: Vec<String> = md["blocks"].as_array().unwrap().iter().map(|b| b.as_object().unwrap().keys().next().unwrap().clone()).collect();
+        assert_eq!(kinds.len(), 3, "{kinds:?}");
+        assert_eq!(md["blocks"][0]["kind"], "warn");
+        assert_eq!(md["buttons"].as_array().unwrap().len(), 3);
+        assert_eq!(md["buttons"][1]["primary"], true);
+        // null closes the one it has open
+        assert_eq!(out_of(&m, &json!({ "modal": null })).modal, Some(Value::Null));
+        // nothing said, nothing done
+        assert!(out_of(&m, &json!({})).modal.is_none());
+    }
 
     fn ctx() -> Value {
         context_of(

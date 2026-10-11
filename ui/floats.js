@@ -3,6 +3,8 @@
 // desktop: the native side lets the mouse reach it only over the cards' rectangles, so everything else is click-through. The cards
 // are the island's own (main.js builds them); this file only places them and moves them around.
 
+import { buildModal } from "./modal.js";
+
 const SNAP = 14; // px from a screen edge, or from another card, that pulls a card to it
 const MARGIN = 12; // where a card settles against an edge
 const GAP = 8; // between two cards that snap together (the gap between the island's own cards)
@@ -76,6 +78,7 @@ export function initFloats({ fetchCards, el, li, invoke, listen }) {
 		wrap.classList.toggle("sized", !!item.h);
 	}
 	function save(f) {
+		if (f.modal) return;
 		invoke("float_set", { item: { key: f.item.key, x: f.item.x, y: f.item.y, w: f.item.w, h: f.item.h || 0, mode: f.item.mode || 0 } });
 	}
 
@@ -211,12 +214,13 @@ export function initFloats({ fetchCards, el, li, invoke, listen }) {
 	// ---- keeping the cards current
 	let busy = false;
 	async function refresh() {
-		if (busy || (!floats.size && !beginning)) return;
+		if (busy || (![...floats.values()].some((f) => !f.modal) && !beginning)) return;
 		busy = true;
 		try {
 			const { cards } = await fetchCards();
 			const byKey = new Map(cards.map((c) => [c._key, c]));
 			for (const [key, f] of [...floats]) {
+				if (f.modal) continue;
 				const c = byKey.get(key);
 				if (!c) {
 					// The card it came from is gone from the island (the context was lost, the page was closed): it stays, with
@@ -460,6 +464,12 @@ export function initFloats({ fetchCards, el, li, invoke, listen }) {
 		const { f } = d;
 		f.wrap.classList.remove("lifted", "snapping");
 		f.wrap.style.removeProperty("--tilt");
+		// a modal is never put back in the island: it lands, and is remembered where it is
+		if (f.modal) {
+			settle(f);
+			rememberModal(f);
+			return;
+		}
 		// let go over the island: back in
 		const s = k();
 		try {
@@ -645,6 +655,174 @@ export function initFloats({ fetchCards, el, li, invoke, listen }) {
 	listen("float-begin", (e) => begin(e.payload));
 	listen("float-cursor", (e) => onCursor(e.payload));
 
+	// ---- modals: windows the island and the plugins open (see modal.js and modal.rs). They are cards of a kind: the same
+	// lifting, tilting and snapping, the same place on the layer; they have a bar and buttons, and answer by an event.
+	const modalPos = new Map(); // the kind of modal -> where it was left
+	const modalKey = (id) => "modal:" + id;
+	const typingNow = (on) => invoke("float_typing", { on }).catch(() => {});
+
+	function rememberModal(f) {
+		if (f.remember) modalPos.set(f.remember, { x: f.item.x, y: f.item.y });
+	}
+
+	function closeModal(id, button = "close", values = null, quiet = false) {
+		const key = modalKey(id);
+		const f = floats.get(key);
+		if (!f) return;
+		const vals = values || f.md.values();
+		rememberModal(f);
+		observer.unobserve(f.wrap);
+		f.wrap.remove();
+		floats.delete(key);
+		pushRegion();
+		typingNow(false);
+		if (!quiet) invoke("modal_result", { id, button, values: vals, closed: true });
+	}
+
+	// the monitor a point is on (else the nearest)
+	function monAt(px, py) {
+		return monOf({ item: { x: px, y: py }, wrap: { offsetWidth: 1, offsetHeight: 1 } });
+	}
+
+	// Where a modal opens: where you left one of its kind; else where it asks (`at`, see modal.js); else the middle of the
+	// screen the island is on (the one the pointer is on when the island is away). One that lands on another is moved
+	// down and right of it.
+	async function placeModal(f, spec) {
+		await loadMons();
+		const mem = f.remember ? modalPos.get(f.remember) : null;
+		const [w, h] = sizeOf(f);
+		const s = k();
+		let x;
+		let y;
+		if (mem) {
+			x = mem.x;
+			y = mem.y;
+		} else {
+			let island = null;
+			try {
+				island = await invoke("float_island");
+			} catch (_) {}
+			const cur = spec._cursor ? [spec._cursor.x / s, spec._cursor.y / s] : null;
+			const home = island ? monAt((island[0] + island[2]) / 2 / s, (island[1] + island[3]) / 2 / s) : cur ? monAt(cur[0], cur[1]) : mons[0];
+			const at = spec.at ?? "center";
+			const midX = home.l + (home.r - home.l - w) / 2;
+			const midY = home.t + (home.b - home.t - h) / 2;
+			x = midX;
+			y = midY;
+			if (at && typeof at === "object") {
+				const fx = Math.max(0, Math.min(1, Number(at.x)));
+				const fy = Math.max(0, Math.min(1, Number(at.y)));
+				if (Number.isFinite(fx)) x = home.l + (home.r - home.l) * fx - w / 2;
+				if (Number.isFinite(fy)) y = home.t + (home.b - home.t) * fy - h / 2;
+			} else if (at === "island" && island) {
+				// right of it, or left if there is no room
+				x = island[2] / s + 20;
+				if (x + w > home.r - MARGIN) x = island[0] / s - w - 20;
+				if (x < home.l + MARGIN) x = midX;
+				y = island[1] / s + 12;
+			} else if (at === "cursor" && cur) {
+				x = cur[0] - w / 2;
+				y = cur[1] + 12;
+			} else if (typeof at === "string" && at !== "center") {
+				const parts = at.split("-");
+				if (parts.includes("left")) x = home.l + MARGIN;
+				if (parts.includes("right")) x = home.r - w - MARGIN;
+				if (parts.includes("top")) y = home.t + MARGIN;
+				if (parts.includes("bottom")) y = home.b - h - MARGIN;
+			}
+		}
+		for (let guard = 0; guard < 12; guard++) {
+			const clash = [...floats.values()].some((o) => o !== f && o.modal && Math.abs(o.item.x - x) < 18 && Math.abs(o.item.y - y) < 18);
+			if (!clash) break;
+			x += 26;
+			y += 26;
+		}
+		f.item.x = x;
+		f.item.y = y;
+		clampXY(f);
+		fit(f);
+		box(f);
+	}
+
+	async function openModal(spec) {
+		if (!spec || typeof spec.id !== "string") return;
+		const key = modalKey(spec.id);
+		const wide = Math.max(280, Math.min(520, Number(spec.width) || 380));
+		let f = floats.get(key);
+		if (f) {
+			// the next step of a flow: the same window, with new words
+			f.item.w = wide;
+			f.md.draw(spec);
+			box(f);
+			front(f);
+			regionSoon();
+			return;
+		}
+		f = make({ key, x: 0, y: 0, w: wide, h: 0, mode: 0 });
+		f.modal = true;
+		f.modalId = spec.id;
+		f.remember = String(spec.remember || spec.id);
+		f.wrap.classList.add("fl-modal");
+		f.wrap.querySelector(".fl-rz")?.remove();
+		const me = f;
+		f.md = buildModal(spec, {
+			el,
+			li,
+			onButton: (button, values, stay) => {
+				if (stay) invoke("modal_result", { id: spec.id, button, values, closed: false });
+				else closeModal(spec.id, button, values);
+			},
+			onClose: () => closeModal(spec.id),
+			onTyping: typingNow,
+		});
+		f.md.bar.addEventListener("pointerdown", (e) => startModalDrag(e, me));
+		f.wrap.prepend(f.md.root);
+		f.wrap.hidden = false;
+		front(f);
+		await placeModal(f, spec);
+		f.wrap.classList.add("md-in");
+		pushRegion();
+	}
+
+	// the bar of a modal is its handle
+	function startModalDrag(e, f) {
+		if (e.button !== 0 || e.target.closest("button, input")) return;
+		const bar = e.currentTarget;
+		const r = f.wrap.getBoundingClientRect();
+		const sx = e.clientX;
+		const sy = e.clientY;
+		let started = false;
+		bar.setPointerCapture(e.pointerId);
+		const move = (ev) => {
+			if (!started) {
+				if (Math.hypot(ev.clientX - sx, ev.clientY - sy) < 5) return;
+				started = true;
+				lift(f, sx - r.left, sy - r.top);
+			}
+			dragTo(ev.clientX, ev.clientY);
+		};
+		const up = (ev) => {
+			bar.removeEventListener("pointermove", move);
+			bar.removeEventListener("pointerup", up);
+			bar.removeEventListener("pointercancel", up);
+			if (started) endDrag(ev.clientX, ev.clientY);
+		};
+		bar.addEventListener("pointermove", move);
+		bar.addEventListener("pointerup", up);
+		bar.addEventListener("pointercancel", up);
+	}
+
+	// Esc closes the top one (it has the keys only while one of its fields is in use)
+	window.addEventListener("keydown", (e) => {
+		if (e.key !== "Escape") return;
+		let top = null;
+		for (const f of floats.values()) if (f.modal && (!top || Number(f.wrap.style.zIndex || 0) >= Number(top.wrap.style.zIndex || 0))) top = f;
+		if (top) closeModal(top.modalId);
+	});
+
+	listen("modal-open", (e) => openModal(e.payload));
+	listen("modal-close", (e) => closeModal(e.payload.id, "close", null, true));
+
 	// ---- start: what floated last time, and a drag-out that came before this page had loaded
 	(async () => {
 		const r = await invoke("float_ready");
@@ -657,6 +835,7 @@ export function initFloats({ fetchCards, el, li, invoke, listen }) {
 			box(f);
 		}
 		if (r.begin) begin(r.begin, !r.down);
+		for (const spec of r.modals || []) openModal(spec);
 		refresh();
 	})();
 

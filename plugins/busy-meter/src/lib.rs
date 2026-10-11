@@ -1,8 +1,8 @@
 //! Busy meter: a ring in the hub for how busy the PC is (the busier of the processor and the memory), and a pill on the
 //! island when the processor stays above a limit for a few readings. The pill has a button that snoozes it.
 //!
-//! It shows what a plugin can do beyond a card: it reads the `system` sensor, adds a ring, offers a pill, and answers a
-//! button. It sees only two numbers.
+//! It shows what a plugin can do beyond a card: it reads the `system` sensor, adds a ring, offers a pill, answers a
+//! button, and opens a window of its own (the pill's second button asks for how long to snooze). It sees only two numbers.
 
 use nadi_plugin::*;
 use std::cell::RefCell;
@@ -40,6 +40,24 @@ fn handle(ev: &Event) -> Reply {
                 s.over = 0;
                 Reply::nothing().no_pill()
             }
+            // the second button: a window, to say for how long
+            "action" if ev.action == "ask" => Reply::modal(
+                Modal::new("Snooze the busy pill")
+                    .text("For how long should it stay away?")
+                    .choice("for", &[("10", "10 minutes"), ("60", "1 hour"), ("480", "8 hours")], "10")
+                    .button("cancel", "Cancel")
+                    .primary("snooze", "Snooze"),
+            ),
+            // what the window's buttons say
+            "action" if ev.action == "modal" => {
+                if ev.args["button"] != "snooze" {
+                    return Reply::nothing();
+                }
+                let minutes: u64 = ev.args["values"]["for"].as_str().and_then(|m| m.parse().ok()).unwrap_or(10).min(24 * 60);
+                s.snoozed_until = ev.now + minutes * 60_000;
+                s.over = 0;
+                Reply::nothing().no_pill()
+            }
             "system" => {
                 let Some(sys) = ev.system.as_ref() else { return Reply::nothing() };
                 let busy = sys.cpu.max(sys.ram);
@@ -55,7 +73,7 @@ fn handle(ev: &Event) -> Reply {
                             .sub(format!("{:.0}% for {} s", sys.cpu, s.over * 2))
                             .right(format!("{:.0}%", sys.cpu))
                             .rank(ev.setting_f64("rank", 5.0) as i32)
-                            .buttons(vec![Button::new("Snooze for 10 minutes", "snooze").icon("x")]),
+                            .buttons(vec![Button::new("Snooze for 10 minutes", "snooze").icon("x"), Button::new("Choose how long", "ask")]),
                     )
                 } else {
                     r.no_pill()
@@ -80,6 +98,24 @@ mod tests {
             system: Some(System { cpu, ram, ram_used_gb: 8.0, ram_total_gb: 16.0 }),
             ..Event::default()
         }
+    }
+
+    #[test]
+    fn the_second_button_opens_a_window_and_its_answer_snoozes_for_as_long_as_it_says() {
+        STATE.with(|s| *s.borrow_mut() = State::default());
+        let ask = Event { event: "action".into(), action: "ask".into(), now: 1000, ..Event::default() };
+        let r = handle(&ask).to_json();
+        assert_eq!(r["modal"]["title"], "Snooze the busy pill");
+        assert_eq!(r["modal"]["blocks"][1]["options"][1]["id"], "60");
+        assert_eq!(r["modal"]["buttons"][1]["primary"], true);
+        // "Cancel" changes nothing
+        let cancel = Event { event: "action".into(), action: "modal".into(), args: json!({ "button": "cancel", "values": { "for": "60" }, "closed": true }), now: 2000, ..Event::default() };
+        assert_eq!(handle(&cancel).to_json()["pill"], Value::Null);
+        STATE.with(|s| assert_eq!(s.borrow().snoozed_until, 0));
+        // "Snooze" for an hour
+        let snooze = Event { event: "action".into(), action: "modal".into(), args: json!({ "button": "snooze", "values": { "for": "60" }, "closed": true }), now: 3000, ..Event::default() };
+        handle(&snooze);
+        STATE.with(|s| assert_eq!(s.borrow().snoozed_until, 3000 + 60 * 60_000));
     }
 
     #[test]

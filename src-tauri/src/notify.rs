@@ -194,6 +194,16 @@ impl NotifState {
         self.history.retain(|e| e.id != id);
     }
 
+    /// forget every notification: the scrollback, the banners that wait, and the one on screen (a session's pill, or what
+    /// a plugin said with one, is not a notification and stays)
+    pub fn clear_history(&mut self) {
+        self.history.clear();
+        self.queue.retain(|n| n.brief.is_some());
+        if self.current.as_ref().map_or(false, |n| n.brief.is_none()) {
+            self.dismiss_current();
+        }
+    }
+
     pub fn has_current(&self) -> bool {
         self.current.is_some()
     }

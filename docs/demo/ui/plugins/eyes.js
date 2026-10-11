@@ -3,6 +3,7 @@
 // react to sound, the beat of the music). Painted on a canvas every frame, on the idle pill and in the hub's header.
 
 import { audio as heard, director as heardDirector, onBeat } from "../sound.js";
+import { head } from "../head.js";
 import { FLOATS, invoke, listen, view } from "../kit.js";
 
 // What the eyes know of the sound: all of it while they react to it, none otherwise (they only ever read it).
@@ -15,8 +16,12 @@ let audio = heard;
 let director = heardDirector;
 const canvas = document.getElementById("face");
 const ctx = canvas.getContext("2d");
-const hubEyesCanvas = document.getElementById("hub-eyes");
+// the eyes of the hub are a widget of the head (see head.js): a canvas that takes the height of the row it is in
+const hubEyesCanvas = document.createElement("canvas");
+hubEyesCanvas.className = "hw-eyes-canvas";
 const hubEyesCtx = hubEyesCanvas.getContext("2d");
+// where the canvas is in the window: the cursor is told in window coordinates
+let gazeOff = { x: 0, y: 0 };
 
 let dpr = window.devicePixelRatio || 1;
 
@@ -281,11 +286,11 @@ function tickBlink(now) {
 function gazeFor(eyeX, eyeY) {
 	const cx = Math.max(
 		-1,
-		Math.min(1, (eyeState.smoothedCursor.x - eyeX) / 60),
+		Math.min(1, (eyeState.smoothedCursor.x - (eyeX + gazeOff.x)) / 60),
 	);
 	const cy = Math.max(
 		-1,
-		Math.min(1, (eyeState.smoothedCursor.y - eyeY) / 40),
+		Math.min(1, (eyeState.smoothedCursor.y - (eyeY + gazeOff.y)) / 40),
 	);
 	const w = mood.glanceW;
 	return [
@@ -530,6 +535,7 @@ function paintEyesAt(targetCtx, centerX, cy, opts = {}) {
 }
 
 function paintEyes() {
+	gazeOff = { x: 0, y: 0 };
 	const w = canvas.width / dpr;
 	const h = canvas.height / dpr;
 	ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -542,15 +548,22 @@ function paintEyes() {
 }
 
 function paintHubEyes() {
+	// (not in the head: the plugin is off, or the widget was taken out)
+	if (!hubEyesCanvas.isConnected || !hubEyesCanvas.offsetWidth) return;
+	// the canvas follows its widget's size: a tall row or a short one
+	if (
+		Math.abs(hubEyesCanvas.width - hubEyesCanvas.offsetWidth * dpr) > 1 ||
+		Math.abs(hubEyesCanvas.height - hubEyesCanvas.offsetHeight * dpr) > 1
+	)
+		sizeCanvasToElement(hubEyesCanvas);
 	const w = hubEyesCanvas.width / dpr;
 	const h = hubEyesCanvas.height / dpr;
 	hubEyesCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
 	hubEyesCtx.clearRect(0, 0, w, h);
+	const r = hubEyesCanvas.getBoundingClientRect();
+	gazeOff = { x: r.left, y: r.top };
 
-	const cx = w / 2;
-	const cy = h / 2;
-
-	paintEyesAt(hubEyesCtx, cx, cy, { scale: 1.3 });
+	paintEyesAt(hubEyesCtx, w / 2, h / 2, { scale: (1.3 * h) / 76 });
 }
 
 // ---- ripples: very thin circular waves expanding from the middle between the eyes, one for each bass hit. Sound panned to
@@ -602,8 +615,15 @@ function paintRings(now) {
 	const S = RINGS_SCALE;
 	const size = Math.max(w, h);
 	// where the eyes sit inside the pill
-	const cx = (pillEl.offsetWidth / 2) * S;
-	const cy = (view.name === "hub" ? 38 : pillEl.offsetHeight / 2) * S;
+	let cx = (pillEl.offsetWidth / 2) * S;
+	let cy = (pillEl.offsetHeight / 2) * S;
+	if (view.name === "hub" && hubEyesCanvas.isConnected && hubEyesCanvas.offsetWidth) {
+		// the eyes of the head: where their widget is, whichever row and place it was put in
+		const er = hubEyesCanvas.getBoundingClientRect();
+		const pr = pillEl.getBoundingClientRect();
+		cx = (er.left + er.width / 2 - pr.left) * S;
+		cy = (er.top + er.height / 2 - pr.top) * S;
+	}
 	c.lineWidth = 0.7; // hairline, always -- only the fade changes
 	c.lineCap = "round";
 	for (let i = rings.length - 1; i >= 0; i--) {
@@ -724,7 +744,7 @@ export const eyes = {
 	cursor,
 	track,
 	/** the canvases follow the layout (the hub's one is only sized once it is on screen) */
-	sizeHub: () => sizeCanvasToElement(hubEyesCanvas),
+	sizeHub: () => (hubEyesCanvas.isConnected ? sizeCanvasToElement(hubEyesCanvas) : undefined),
 	/** the face canvas is left alone while another view has the island: clear its last frame */
 	clearFace: () => ctx.clearRect(0, 0, canvas.width, canvas.height),
 };
@@ -733,6 +753,24 @@ export default {
 	id: "eyes",
 	init() {
 		if (FLOATS) return;
+		const box = document.createElement("div");
+		box.className = "hw-eyes";
+		box.append(hubEyesCanvas);
+		head.register({
+			id: "eyes",
+			plugin: "eyes",
+			name: "Eyes",
+			place: "center",
+			rank: 20,
+			width: 72,
+			preview: () => {
+				const pic = document.createElement("span");
+				pic.className = "still-eyes";
+				pic.innerHTML = "<i></i><i></i>";
+				return pic;
+			},
+			build: () => box,
+		});
 		listen("look-tick", (e) => apply(e.payload));
 		invoke("look_state").then(apply).catch(() => {});
 	},

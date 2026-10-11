@@ -1,8 +1,8 @@
 //! Native plugins: the features that need what a sandbox must not hand out, written in Rust inside the app.
 //!
-//! The island itself is a window manager: the pill, the hub, the banners and the floating cards, the calendar view, the
-//! eyes and the sensors (audio, media session, which programs have a window). What it shows beyond that comes from
-//! plugins. A native plugin is one of those, written in Rust and shipped inside the app (the ones that a module or a
+//! The island itself is a window manager: the pill, the hub, the banners and the floating cards, the head's rows, and the
+//! sensors (audio, media session, which programs have a window). What it shows beyond that comes from plugins: the
+//! eyes, the date, the rings and the calendar page are widgets and pages that plugins bring. A native plugin is one of those, written in Rust and shipped inside the app (the ones that a module or a
 //! declarative plugin can be are carried by the app as such: see bundled.rs); it goes through the same host as a folder
 //! plugin: the same list in Settings > Plugins, the same switch (and the question before it is switched on), its own
 //! settings, mute and do not disturb, and it reaches the screen only through what the host offers it here:
@@ -226,7 +226,7 @@ impl Host {
                 self.save();
             }
         }
-        // The agenda was a plugin of its own, next to the ICS calendar; they are one now (ICS Calendar). It stays on if either
+        // The agenda was a plugin of its own, next to the ICS calendar; they are one now (Calendar). It stays on if either
         // was on; a reminder the agenda had switched off stays off, and so does the mute.
         {
             let mut saved = self.saved.lock().unwrap();

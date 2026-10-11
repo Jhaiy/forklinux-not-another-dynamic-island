@@ -15,6 +15,7 @@ pub mod look;
 pub mod now_playing;
 pub mod pages;
 pub mod sound_light;
+pub mod system_meters;
 pub mod toasts;
 pub mod work;
 
@@ -54,6 +55,7 @@ built_in! {
     toasts => toasts::Toasts,
     eyes => eyes::Eyes,
     sound_light => sound_light::SoundLight,
+    system_meters => system_meters::SystemMeters,
 }
 
 #[cfg(test)]

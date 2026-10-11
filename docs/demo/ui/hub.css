@@ -47,54 +47,845 @@
   display: none;
 }
 
-/* ---- header: clock | eyes | stat rings ---- */
+/* ---- the head: rows of widgets that the plugins bring (see head.js) ----
+   Each row has a left, a center and a right place. The center is at the dead center of its row (the two sides share what
+   is left of it, equally); a row with nothing in the center has none, and the sides share the whole row. */
 #hub-head {
   position: relative;
   flex: none;
-  height: 76px;
 }
 
-#hub-eyes {
-  position: absolute;
-  inset: 0;
+.hh-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  column-gap: 18px;
+  padding: 0 16px;
+}
+
+.hh-first {
+  --rowh: 76px;
+  height: var(--rowh);
+}
+
+.hh-x {
+  --rowh: 44px;
+  height: var(--rowh);
+  border-top: 1px solid rgba(255, 255, 255, 0.045);
+}
+
+.hh-row.hh-noc {
+  grid-template-columns: auto minmax(0, 1fr);
+}
+
+/* ---- the foot: the same rows, at the bottom of the island, under the cards ---- */
+#hub-foot {
+  position: relative;
+  flex: none;
+}
+
+#hub-foot:not(:empty) {
+  border-top: 1px solid rgba(255, 255, 255, 0.045);
+}
+
+.hh-x.hh-b {
+  border-top: 0;
+}
+
+.hh-area-l {
+  padding: 10px 18px 0;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #6f6f77;
+}
+
+.hh-row.hh-noc > .hh-zone.c {
+  display: none;
+}
+
+.hh-zone {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  height: 100%;
+}
+
+.hh-zone.l {
+  justify-content: flex-start;
+}
+
+.hh-zone.c {
+  justify-content: center;
+}
+
+.hh-zone.r {
+  justify-content: flex-end;
+}
+
+.hh-w {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: none;
+  height: 100%;
+}
+
+/* ---- widgets ---- */
+.hw-eyes {
+  width: calc(var(--rowh, 76px) * 0.95);
+  height: var(--rowh, 76px);
+}
+
+.hw-eyes-canvas {
+  display: block;
   width: 100%;
   height: 100%;
-  display: block;
 }
 
-#hub-clock {
-  position: absolute;
-  left: 24px;
-  top: 0;
-  height: 100%;
+.hw-clock {
   display: flex;
   flex-direction: column;
   justify-content: center;
   gap: 3px;
+  height: calc(var(--rowh, 76px) - 14px);
+  max-height: 62px;
+  padding: 0 10px;
+  margin-left: -8px;
+  border: 0;
+  border-radius: 14px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.45s var(--spring), background 0.25s ease;
 }
 
-#hub-time {
+.hw-clock:hover {
+  background: rgba(255, 255, 255, 0.045);
+  transform: scale(1.03);
+}
+
+.hw-clock:active {
+  transform: scale(0.96);
+}
+
+.hw-time {
   font-size: 26px;
   font-weight: 300;
   line-height: 1;
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
-#hub-date {
+.hw-date {
   font-size: 11px;
   font-weight: 500;
   color: var(--fg-mute);
+  white-space: nowrap;
 }
 
-#hub-rings {
-  position: absolute;
-  right: 22px;
-  top: 0;
+/* (a short row has both lines too, a little smaller) */
+.hh-x .hw-clock {
+  height: auto;
+  padding: 3px 10px;
+  gap: 1px;
+}
+
+.hh-x .hw-time {
+  font-size: 19px;
+}
+
+.hh-x .hw-date {
+  font-size: 10px;
+}
+
+/* ---- the widgets of System meters and of Claude usage: thin bars, stacked ---- */
+.sm-bars {
+  display: grid;
+  width: max-content;
+}
+
+.sm-row {
+  display: grid;
+  grid-template-columns: 22px 48px;
+  column-gap: 6px;
+  align-items: center;
+  height: 12px;
+  font-size: 9px;
+  line-height: 1;
+}
+
+.sm-row.none,
+.cu-row.none {
+  display: none;
+}
+
+.sm-row b {
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--fg-mute);
+}
+
+.sm-row i,
+.cu-row i {
+  display: block;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.sm-row i {
+  height: 4px;
+  border-radius: 2px;
+}
+
+.sm-row u,
+.cu-row u {
+  display: block;
   height: 100%;
+  border-radius: inherit;
+  text-decoration: none;
+  transition: width 0.6s var(--spring), background 0.3s ease;
+}
+
+.cu-bars {
+  display: grid;
+  width: max-content;
+  cursor: pointer;
+}
+
+.cu-row {
+  display: grid;
+  grid-template-columns: 14px 48px;
+  column-gap: 6px;
+  align-items: center;
+  height: 15px;
+  font-size: 9px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.cu-row b {
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--fg-mute);
+}
+
+.cu-row i {
+  height: 4px;
+  border-radius: 2px;
+}
+
+/* a ring with nothing to show takes no room */
+.hh-w:has(> .ring-wrap.hidden) {
+  display: none;
+}
+
+/* ---- edit mode: widgets are picked up and put down ----
+   Nothing here changes how much room a widget or a place takes (the outlines and the grips are drawn around them, not in
+   them), so the rows fit in edit mode exactly as they do the rest of the time. */
+/* (the places are outlined 6px outside what they hold, so the rows get room for it: the first one is lifted off the island's top edge,
+   and the rows are further apart. The widgets keep their size) */
+.hh-edit .hh-row {
+  box-sizing: border-box;
+}
+
+.hh-edit .hh-first {
+  height: calc(var(--rowh) + 22px);
+  padding-top: 12px;
+  padding-bottom: 10px;
+}
+
+.hh-edit .hh-x {
+  --rowh: 58px;
+}
+
+.hh-edit .hh-zone {
+  height: auto;
+  min-width: 58px;
+  min-height: 34px;
+}
+
+/* a place's outline is a layer of its own, so that it can spring when the place shrinks or grows (head.js) */
+.hh-frame {
+  display: none;
+}
+
+.hh-edit .hh-frame {
+  display: block;
+  position: absolute;
+  inset: -7px;
+  box-sizing: border-box;
+  border: 1.5px dashed rgba(255, 255, 255, 0.38);
+  border-radius: 16px;
+  pointer-events: none;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.hh-edit .hh-row.hh-noc {
+  grid-template-columns: minmax(58px, auto) minmax(58px, 1fr);
+}
+
+/* (an empty center is a place of its own only where its row has room to spare for it; where it has none it is not offered) */
+.hh-edit .hh-row.hh-noc.hh-slot {
+  grid-template-columns: minmax(0, 1fr) 64px minmax(0, 1fr);
+}
+
+.hh-edit .hh-row.hh-noc.hh-slot > .hh-zone.c {
+  display: flex;
+  min-width: 0;
+}
+
+.hh-edit .hh-zone.hh-empty::after {
+  content: "Drop here";
+  margin: auto;
+  font-size: 10px;
+  font-style: italic;
+  color: #7a7a83;
+  white-space: nowrap;
+}
+
+.hh-edit .hh-row.hh-noc > .hh-zone.c.hh-empty::after {
+  content: "\2022";
+  font-style: normal;
+}
+
+.hh-edit .hh-zone.hh-ok > .hh-frame {
+  border-color: var(--accent, #e9e9ee);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.hh-edit .hh-zone.hh-nope > .hh-frame {
+  border-color: #d46a6a;
+  background: rgba(212, 106, 106, 0.09);
+}
+
+.hh-edit .hh-zone.hh-nope::before {
+  content: "No room";
+  position: absolute;
+  top: -15px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 4;
+  font-size: 9.5px;
+  font-weight: 700;
+  color: #1d0b0b;
+  background: #d46a6a;
+  padding: 1px 8px;
+  border-radius: 99px;
+  white-space: nowrap;
+}
+
+.hh-edit .hh-w {
+  isolation: isolate;
+  cursor: grab;
+}
+
+.hh-edit .hh-w::before {
+  content: "";
+  position: absolute;
+  inset: -4px -4px;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.07);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16), 0 1px 3px rgba(0, 0, 0, 0.35);
+  z-index: -1;
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.hh-edit .hh-w:hover::before {
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.34), 0 2px 6px rgba(0, 0, 0, 0.4);
+}
+
+.hh-edit .hh-w:active {
+  cursor: grabbing;
+}
+
+.hh-edit .hh-w * {
+  pointer-events: none;
+}
+
+.hh-edit .hw-clock {
+  margin-left: 0;
+}
+
+/* the widget in the hand: it floats over the island, and turns red once it is off it (let go, and it is taken out) */
+.hh-w.hh-lift {
+  position: absolute;
+  height: auto;
+  z-index: 50;
+  pointer-events: none;
+  transform: rotate(-2.5deg) scale(1.04);
+  background: #26262b;
+  outline: 1.5px solid var(--accent, #e9e9ee);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.6);
+  transition: opacity 0.15s ease, outline-color 0.15s ease;
+}
+
+.hh-w.hh-lift.hh-out {
+  opacity: 0.55;
+  outline-color: #d46a6a;
+}
+
+.hh-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 12px 6px;
+}
+
+.hh-add {
   display: flex;
   align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  border: 1.5px dashed rgba(255, 255, 255, 0.38);
+  border-radius: 14px;
+  background: transparent;
+  color: var(--fg-dim);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+#hub-foot > .hh-add {
+  width: calc(100% - 24px);
+  margin: 12px 12px 12px;
+}
+
+.hh-add:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--fg);
+}
+
+.hh-add .li {
+  width: 12px;
+  height: 12px;
+}
+
+/* ---- the tray: the widgets the plugins offer (see head.js). A fixed height; it scrolls inside itself ---- */
+.hh-tray {
+  position: relative;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.035);
+  overflow: hidden;
+}
+
+.hh-tray.hh-more::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 30px;
+  background: linear-gradient(to bottom, rgba(16, 16, 19, 0), rgba(16, 16, 19, 0.92));
+  pointer-events: none;
+}
+
+.hh-tray-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.hh-tray-l {
+  flex: none;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-mute);
+}
+
+.hh-search {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border-radius: 15px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--fg-mute);
+}
+
+.hh-search .li {
+  flex: none;
+  width: 13px;
+  height: 13px;
+}
+
+.hh-search input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 11.5px;
+}
+
+.hh-search input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.hh-search:focus-within {
+  outline: 2px solid var(--accent, #e9e9ee);
+  outline-offset: 1px;
+}
+
+.hh-switch {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 15px;
+  background: rgba(255, 255, 255, 0.07);
+  color: #c9c9d0;
+  font: inherit;
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.hh-switch i {
+  position: relative;
+  display: block;
+  width: 22px;
+  height: 12px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.2);
+  transition: background 0.2s ease;
+}
+
+.hh-switch i::after {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 2px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #d8d8dc;
+  transition: transform 0.35s var(--spring), background 0.2s ease;
+}
+
+.hh-switch[aria-pressed="true"] i {
+  background: var(--accent, #e9e9ee);
+}
+
+.hh-switch[aria-pressed="true"] i::after {
+  transform: translateX(10px);
+  background: #0e0e10;
+}
+
+.hh-tray-body {
+  max-height: 268px;
+  overflow-y: auto;
+  padding: 0 12px 12px;
+  overscroll-behavior: contain;
+}
+
+.hh-tray-body::-webkit-scrollbar {
+  width: 4px;
+}
+
+.hh-tray-body::-webkit-scrollbar-thumb {
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.hh-tray-gh {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: calc(100% + 24px);
+  height: 30px;
+  margin: 0 -12px;
+  padding: 0 12px;
+  border: 0;
+  background: #101013;
+  color: #e6e6ea;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.hh-tray-gh .li {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  color: var(--fg-mute);
+  transform: rotate(-90deg);
+  transition: transform 0.3s var(--spring);
+}
+
+.hh-tray-gh.open .li {
+  transform: none;
+}
+
+.hh-tray-c {
+  font-size: 10.5px;
+  font-weight: 400;
+  color: #6f6f77;
+}
+
+.hh-tiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 2px 0 8px;
+}
+
+.hh-tile {
+  position: relative;
+  display: grid;
+  gap: 6px;
+  justify-items: center;
+  align-content: space-between;
+  width: 92px;
+  padding: 8px 8px 6px;
+  border: 0;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.07);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+  color: #c9c9d0;
+  font: inherit;
+  cursor: grab;
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.hh-tile:hover:not(.used) {
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.34);
+}
+
+.hh-tile:active:not(.used) {
+  cursor: grabbing;
+}
+
+.hh-tile.used {
+  opacity: 0.42;
+  cursor: default;
+}
+
+.hh-tile-pv {
+  display: grid;
+  place-items: center;
+  min-height: 28px;
+  pointer-events: none;
+}
+
+/* (a picture of a widget in a tile: it is not the widget, so nothing in it takes the mouse or the keys) */
+.hh-tile-pv * {
+  pointer-events: none;
+}
+
+.still-clock {
+  display: grid;
+  gap: 2px;
+  justify-items: center;
+}
+
+.still-time {
+  font-size: 15px;
+  font-weight: 300;
+  line-height: 1;
+  color: #f2f2f4;
+}
+
+.still-date {
+  max-width: 78px;
+  overflow: hidden;
+  font-size: 8px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--fg-mute);
+}
+
+.still-eyes {
+  display: flex;
+  gap: 8px;
+}
+
+.still-eyes i {
+  display: block;
+  width: 6px;
+  height: 9px;
+  border-radius: 3px;
+  background: #f4f4f6;
+}
+
+.hh-tile.used {
+  padding-top: 16px;
+}
+
+.hh-tile-nm {
+  max-width: 80px;
+  overflow: hidden;
+  font-size: 10px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.hh-tile-nm b {
+  color: #f2f2f4;
+  font-weight: 600;
+}
+
+.hh-tile-tag {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #9a9aa2;
+}
+
+.hh-tray-none {
+  padding: 18px 4px;
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--fg-mute);
+}
+
+.hh-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 10px;
+  padding: 8px 8px 8px 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.hh-bar p {
+  margin: 0;
+  font-size: 11.5px;
+  color: #a2a2aa;
+}
+
+.hh-bar > div {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+.hh-btn {
+  height: 30px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 15px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #d8d8dc;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.hh-btn.go {
+  background: var(--fg);
+  color: #0e0e10;
+}
+
+.hh-add:focus-visible,
+.hh-tile:focus-visible,
+.hh-tray-gh:focus-visible,
+.hh-switch:focus-visible,
+.hh-btn:focus-visible,
+.hw-clock:focus-visible {
+  outline: 2px solid var(--fg);
+  outline-offset: 2px;
+}
+
+/* edit mode: the cards below are out of the way */
+/* (edit mode has no cards: the head, with its tray, takes the room, and scrolls if the island cannot be as tall; the foot stays) */
+#hub.hh-editing #hub-body {
+  display: none;
+}
+
+#hub.hh-editing #hub-head {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+#hub.hh-editing #hub-head::-webkit-scrollbar {
+  width: 4px;
+}
+
+#hub.hh-editing #hub-head::-webkit-scrollbar-thumb {
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.25);
+}
+
+/* ---- the island with nothing on ---- */
+#blank {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 36px 24px 28px;
+  text-align: center;
+}
+
+#blank.hidden {
+  display: none;
+}
+
+.blank-ico {
+  display: grid;
+  place-items: center;
+  width: 60px;
+  height: 60px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--fg-dim);
+}
+
+.blank-ico .li {
+  width: 28px;
+  height: 28px;
+}
+
+#blank h2 {
+  margin: 4px 0 0;
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+#blank p {
+  margin: 0;
+  max-width: 300px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--fg-dim);
 }
 
 .ring-wrap {
@@ -206,10 +997,6 @@
 #hub-head.enter > * {
   animation: rise 0.65s var(--spring) backwards;
   animation-delay: calc(var(--i, 0) * 45ms);
-}
-
-#hub-head.enter > #hub-eyes {
-  animation: none;
 }
 
 /* ---- cards: soft glass with a cursor-following spotlight ---- */
@@ -741,6 +1528,68 @@
   border-radius: 50%;
 }
 
+#tip.rich {
+  max-width: 300px;
+  padding: 9px 12px;
+}
+
+.tip-rows {
+  display: grid;
+  gap: 7px;
+  min-width: 170px;
+}
+
+.tip-title {
+  font-weight: 600;
+}
+
+.tip-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.tip-lab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+
+.tip-val {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.tip-bar {
+  height: 3px;
+  margin-top: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+
+.tip-bar u {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  text-decoration: none;
+}
+
+.tip-note {
+  margin-top: 2px;
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--fg-dim);
+}
+
+.tip-foot {
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--fg-mute);
+}
+
 .tip-sub {
   margin-top: 2px;
   font-weight: 400;
@@ -793,25 +1642,7 @@
   display: none;
 }
 
-/* ---- clock is a button: click swaps the cards for the calendar ---- */
-#hub-clock {
-  cursor: pointer;
-  padding: 0 10px;
-  left: 14px;
-  border-radius: 14px;
-  transition: transform 0.45s var(--spring), background 0.25s ease;
-}
-
-#hub-clock:hover {
-  background: rgba(255, 255, 255, 0.045);
-  transform: scale(1.03);
-}
-
-#hub-clock:active {
-  transform: scale(0.96);
-}
-
-/* ---- calendar pane ---- */
+/* ---- calendar pane (the Calendar plugin's page) ---- */
 #pane-calendar {
   display: flex;
   flex-direction: column;
@@ -1165,6 +1996,72 @@
   opacity: 0;
   transform: translateX(36px) scale(0.96);
   pointer-events: none;
+}
+
+/* the head of the list: its name, and a button that clears it all (only while the island is hovered) */
+.notif-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 22px;
+  padding: 0 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-mute);
+}
+
+.notif-clear {
+  border: 0;
+  border-radius: 999px;
+  padding: 3px 10px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--fg-dim);
+  font: inherit;
+  font-size: 11px;
+  letter-spacing: 0;
+  text-transform: none;
+  cursor: pointer;
+  opacity: 0;
+  transform: scale(0.9);
+  pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.4s var(--spring), background 0.2s ease, color 0.2s ease;
+}
+
+#hub:hover .notif-clear {
+  opacity: 1;
+  transform: scale(1);
+  pointer-events: auto;
+}
+
+.notif-clear:hover {
+  background: rgba(255, 255, 255, 0.13);
+  color: var(--fg);
+}
+
+.notif-clear:active {
+  transform: scale(0.94);
+}
+
+.notif-history-item.swiping {
+  cursor: grabbing;
+  user-select: none;
+}
+
+/* the card a banner brought you to */
+.notif-history-item.flash {
+  animation: notif-flash 2.2s ease-out;
+}
+
+@keyframes notif-flash {
+  0%,
+  35% {
+    box-shadow: 0 0 0 1.5px rgba(var(--accent-rgb), 0.85), 0 0 18px rgba(var(--accent-rgb), 0.35);
+  }
+  100% {
+    box-shadow: 0 0 0 1.5px rgba(var(--accent-rgb), 0), 0 0 18px rgba(var(--accent-rgb), 0);
+  }
 }
 
 .notif-x {
@@ -3095,176 +3992,6 @@ svg.li {
   background: rgba(255, 255, 255, 0.13);
 }
 
-/* ---- a post and its comments, read-only ---- */
-.th-by {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 8px;
-  font-size: 11.5px;
-  color: var(--fg-dim);
-  margin-bottom: 8px;
-}
-
-.th-who {
-  color: var(--fg);
-  font-weight: 600;
-}
-
-.th-dim {
-  color: var(--fg-dim);
-}
-
-.th-chip {
-  font-size: 10.5px;
-  padding: 1px 7px;
-  border-radius: 99px;
-  background: rgba(255, 255, 255, 0.07);
-}
-
-.th-lead {
-  font-size: 13.5px;
-  line-height: 1.45;
-  margin-bottom: 8px;
-  display: -webkit-box;
-  -webkit-line-clamp: 5;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  overflow-wrap: anywhere;
-}
-
-.th-stats {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 16px;
-  font-size: 12px;
-  color: var(--fg-dim);
-  font-variant-numeric: tabular-nums;
-  margin-bottom: 10px;
-}
-
-.th-stat {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.th-stat svg {
-  width: 14px;
-  height: 14px;
-  opacity: 0.6;
-}
-
-.th-stat b {
-  color: var(--fg);
-  font-weight: 600;
-}
-
-.th-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 10px;
-  padding-top: 9px;
-  border-top: 1px solid rgba(255, 255, 255, 0.07);
-  font-size: 11.5px;
-}
-
-.th-h {
-  font-size: 11px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  opacity: 0.6;
-  font-weight: 600;
-}
-
-.th-list {
-  max-height: 330px;
-  overflow-y: auto;
-  display: grid;
-  gap: 2px;
-  padding: 4px 2px 22px 0;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
-  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 26px), transparent);
-  mask-image: linear-gradient(to bottom, #000 calc(100% - 26px), transparent);
-}
-
-.th-c {
-  display: grid;
-  gap: 2px;
-  padding: 7px 8px 7px 10px;
-  margin-left: calc(var(--d, 0) * 14px);
-  border-left: 2px solid rgba(255, 255, 255, 0.11);
-  min-width: 0;
-}
-
-.th-c[data-d="0"] {
-  border-left-color: transparent;
-}
-
-.th-c[data-d="1"] {
-  border-left-color: rgba(90, 200, 140, 0.35);
-}
-
-.th-c[data-d="2"] {
-  border-left-color: rgba(229, 169, 61, 0.35);
-}
-
-.th-c[data-d="3"] {
-  border-left-color: rgba(120, 160, 230, 0.35);
-}
-
-.th-m {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 3px 8px;
-  font-size: 11.5px;
-  opacity: 0.75;
-}
-
-.th-a {
-  font-weight: 600;
-}
-
-.th-op {
-  color: var(--accent);
-  border: 1px solid rgba(90, 200, 140, 0.45);
-  border-radius: 99px;
-  padding: 0 6px;
-  font-size: 10px;
-  letter-spacing: 0.04em;
-}
-
-.th-sc {
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  font-variant-numeric: tabular-nums;
-}
-
-.th-sc svg {
-  width: 10px;
-  height: 10px;
-}
-
-.th-tx {
-  font-size: 12.5px;
-  line-height: 1.42;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  overflow-wrap: anywhere;
-}
-
-.th-fold {
-  text-align: center;
-  font-size: 11.5px;
-  opacity: 0.5;
-}
-
 .pk-fields {
   display: grid;
   gap: 3px;
@@ -3484,6 +4211,520 @@ html.floats #float-layer {
 
 .fl.glide {
   transition: left 0.22s cubic-bezier(0.2, 0.9, 0.3, 1), top 0.22s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+
+/* ---- modals: windows the island and the plugins open (see modal.js); they live on the floating cards' layer ---- */
+.fl.fl-modal {
+  border-radius: 20px;
+  background: #1d1d22;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08), 0 12px 32px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  color: #d8d8dc;
+}
+
+.fl.fl-modal.md-in {
+  animation: md-in 0.36s var(--spring);
+}
+
+@keyframes md-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.fl.fl-modal.lifted {
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12), 0 18px 40px rgba(0, 0, 0, 0.55);
+}
+
+.md {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 40px);
+}
+
+.md-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 46px;
+  padding: 0 10px 0 14px;
+  background: rgba(255, 255, 255, 0.03);
+  cursor: grab;
+  user-select: none;
+}
+
+.fl.lifted .md-bar {
+  cursor: grabbing;
+}
+
+.md-tile {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  background: #e9e9ee;
+  color: #0e0e10;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.md-title {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  color: #f2f2f4;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* whose it is: drawn by the island, in a place the plugin's own words cannot reach */
+.md-from {
+  flex: none;
+  max-width: 120px;
+  overflow: hidden;
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.09);
+  font-size: 10px;
+  color: #b4b4bb;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.md-from[hidden] {
+  display: none;
+}
+
+.md-x {
+  flex: none;
+  margin-left: auto;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #9a9aa2;
+  cursor: pointer;
+}
+
+.md-x:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #f2f2f4;
+}
+
+.md-x .li {
+  width: 14px;
+  height: 14px;
+}
+
+.md-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  gap: 12px;
+  align-content: start;
+  padding: 16px 18px;
+  scrollbar-width: thin;
+}
+
+.md-foot {
+  flex: none;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 14px 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.md-foot[hidden] {
+  display: none;
+}
+
+.md-text {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: #c4c4cc;
+  white-space: pre-line;
+}
+
+.md-text.title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #f2f2f4;
+}
+
+.md-text.muted {
+  font-size: 11.5px;
+  color: #8a8a92;
+}
+
+.md-text.note {
+  font-size: 11px;
+  color: #7c7c84;
+}
+
+.md-text.warn {
+  padding: 9px 12px;
+  border-radius: 12px;
+  background: rgba(230, 161, 90, 0.13);
+  font-size: 11.5px;
+  color: #f0c08a;
+}
+
+.md-facts {
+  display: grid;
+  gap: 0;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.md-fact {
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.md-fact:first-child {
+  border-top: 0;
+}
+
+.md-fact b {
+  font-family: "Cascadia Code", "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+  font-weight: 600;
+  color: #f2f2f4;
+}
+
+.md-fact span {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: #9a9aa2;
+}
+
+.md-fieldwrap {
+  display: grid;
+  gap: 6px;
+}
+
+.md-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #9a9aa2;
+}
+
+.md-field {
+  height: 38px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 12px;
+  outline: 0;
+  background: rgba(0, 0, 0, 0.35);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+  color: #f2f2f4;
+  font: inherit;
+  font-size: 12.5px;
+}
+
+.md-field:focus {
+  box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.55);
+}
+
+.md-choice {
+  display: flex;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.md-opt {
+  flex: 1;
+  height: 30px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: #9a9aa2;
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.md-opt[aria-pressed="true"] {
+  background: rgba(255, 255, 255, 0.12);
+  color: #f2f2f4;
+}
+
+.md-list {
+  display: grid;
+  gap: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.md-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #e6e6ea;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.md-row[aria-selected="true"] {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.md-row-s {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: #8a8a92;
+}
+
+.md-checks {
+  display: grid;
+  max-height: 300px;
+  overflow-y: auto;
+  margin: 0 -8px;
+}
+
+.md-check {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+}
+
+.md-check:first-child {
+  border-top: 0;
+}
+
+.md-check.off {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.md-check input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.md-cb {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 17px;
+  height: 17px;
+  margin-top: 8px;
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.35);
+  color: transparent;
+  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.md-cb .li {
+  width: 11px;
+  height: 11px;
+}
+
+.md-check.on .md-cb {
+  background: #e9e9ee;
+  color: #0e0e10;
+  box-shadow: none;
+}
+
+.md-check input:focus-visible + .md-cb {
+  outline: 2px solid #e9e9ee;
+  outline-offset: 2px;
+}
+
+.md-ico {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: #c9c9d0;
+  color: #0e0e10;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.md-check-t {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.md-check-n {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.md-check-n b {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #f2f2f4;
+}
+
+.md-tag {
+  font-style: normal;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #9a9aa2;
+}
+
+.md-check-s {
+  font-size: 11px;
+  line-height: 1.4;
+  color: #8a8a92;
+}
+
+.md-check-note {
+  font-size: 10.5px;
+  color: #f0b8a8;
+}
+
+.md-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 4px;
+}
+
+.md-badge {
+  font-style: normal;
+  display: inline-flex;
+  align-items: center;
+  height: 19px;
+  padding: 0 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 10px;
+  color: #b4b4bb;
+}
+
+.md-badge.net {
+  background: rgba(230, 161, 90, 0.16);
+  color: #f0b878;
+}
+
+.md-badge.add {
+  background: rgba(120, 170, 255, 0.16);
+  color: #9cc0ff;
+}
+
+.md-badge.warn {
+  background: rgba(229, 103, 92, 0.16);
+  color: #ff9a90;
+}
+
+.md-progress {
+  display: grid;
+  gap: 8px;
+}
+
+.md-track {
+  position: relative;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+
+.md-track i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: #e9e9ee;
+  transition: width 0.4s var(--spring);
+}
+
+.md-track.moving i {
+  position: absolute;
+  width: 35%;
+  animation: md-move 1.1s ease-in-out infinite;
+}
+
+@keyframes md-move {
+  from {
+    left: -35%;
+  }
+  to {
+    left: 100%;
+  }
+}
+
+.md-btn {
+  height: 34px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 17px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #e6e6ea;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.md-btn:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.md-btn.p {
+  background: #e9e9ee;
+  color: #0e0e10;
+}
+
+.md-btn.p:hover {
+  background: #fff;
+}
+
+.md-btn.d {
+  background: #e5675c;
+  color: #1d0b0b;
+}
+
+.md-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.md button:focus-visible,
+.md input:focus-visible {
+  outline: 2px solid #e9e9ee;
+  outline-offset: 2px;
 }
 
 .fl-rz {
@@ -4163,11 +5404,20 @@ html.floats #float-layer {
 #set-tabs {
   flex: none;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(4, 1fr) 34px 34px;
   gap: 3px;
   padding: 3px;
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.05);
+}
+
+#set-tabs button.set-edit,
+#set-tabs button.set-close {
+  width: 34px;
+}
+
+#set-tabs button.set-edit {
+  margin-left: 4px;
 }
 
 #set-tabs button {
@@ -4534,6 +5784,33 @@ label.set-row {
 }
 
 /* ---- the plugin list: a row each, opened for its settings ---- */
+/* the plugins that came from one repository sit together under its name */
+.pg-group {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 14px 4px 6px;
+}
+
+.pg-group b {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.pg-group span {
+  font-size: 11px;
+  color: var(--fg-mute);
+}
+
+.pg-update {
+  margin-left: auto;
+  align-self: center;
+  height: 26px;
+  padding: 0 11px;
+  font-size: 11px;
+}
+
 .pl {
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
 }
@@ -4749,4 +6026,13 @@ label.set-row {
   grid-template-columns: minmax(0, 1fr) 46px;
   gap: 8px;
   align-items: center;
+}
+
+/* a second line under a settings row's label */
+.set-sub {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--fg-mute);
 }

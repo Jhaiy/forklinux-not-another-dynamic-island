@@ -3,7 +3,7 @@
   "name": "Games",
   "description": "The game you are playing, for how long, and how it runs.",
   "version": "1.0.0",
-  "default_on": true,
+  "default_on": false,
   "permissions": {
     "sees": [
       { "name": "windows" },

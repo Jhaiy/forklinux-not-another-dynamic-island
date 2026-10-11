@@ -718,8 +718,9 @@
     { id: "toasts", name: "Notification mirror", description: "Shows the notifications of other apps (Discord, Viber, ...) on the island.", sees: [["notifications"], ["windows"]] },
     { id: "eyes", name: "Eyes", description: "The two eyes of the island: they blink, look at the cursor, squash and stretch as it moves, glance around when it rests, and show moods. They can bounce to the beat of what you play.", sees: [["cursor position"], ["audio"]], on: () => S().show_eyes !== false, set: (v) => { patch({ show_eyes: v }); lookTick(); }, settings: [{ key: "react", label: "React to sound", type: "toggle", get: () => W.eyesReact, set: (v) => { W.eyesReact = v; lookTick(); } }, { key: "rings", label: "Ripples on the bass", type: "toggle", get: () => W.eyesRings, set: (v) => { W.eyesRings = v; lookTick(); } }] },
     { id: "sound-light", name: "Sound light", description: "An aura that lives in the island and dances to what you play: soft lights that follow the music, ripples on the bass, a warm halo for a voice. A little of it spills out of the island.", sees: [["audio"]], on: () => S().react_to_audio !== false, set: (v) => { patch({ react_to_audio: v }); lookTick(); }, settings: [{ key: "brightness", label: "Max brightness (0 = off)", type: "range", min: 0, max: 100, step: 5, unit: "%", get: () => W.lightBrightness, set: (v) => { W.lightBrightness = v; lookTick(); } }, { key: "ambient", label: "Light outside the island", type: "range", min: 0, max: 100, step: 5, unit: "%", get: () => S().audio_bleed ?? 60, set: (v) => { patch({ audio_bleed: v }); lookTick(); } }] },
+    { id: "system-meters", name: "System meters", description: "Rings in the head of the expanded island for how busy the CPU, the memory and the graphics card are.", sees: [["performance"]] },
     { id: "time", kind: "wasm", name: "Time", description: "The island says what time it is now and then, in a small pill.", sees: [["clock"]], on: () => S().time_announce, set: (v) => patch({ time_announce: v }), settings: [{ key: "every", label: "Every", type: "choice", options: INTERVALS.map((m, i) => ({ value: i, label: m < 60 ? `${m} minutes` : m === 60 ? "Hour" : `${m / 60} hours` })), get: () => S().time_interval, set: (v) => patch({ time_interval: v }) }, { key: "h24", label: "24-hour clock", type: "toggle", get: () => S().time_24h, set: (v) => patch({ time_24h: v }) }], actions: [{ id: "preview", label: "Show it now" }] },
-    { id: "ics-calendar", kind: "wasm", name: "ICS Calendar", description: "Brings the events of a calendar link (.ics: Google Calendar, Outlook, iCloud) to the island's calendar, shows the next ones on a card, and reminds you with a banner shortly before one starts.", sees: [["network", "the address you give it (\"Calendar link (.ics)\")"], ["calendar"]], on: () => !!S().calendar_ics_url, set: (v) => patch({ calendar_ics_url: v ? "https://calendar.google.com/calendar/ical/you%40example.com/private-demo/basic.ics" : "" }), settings: [{ key: "url", label: "Calendar link (.ics)", type: "text", get: () => S().calendar_ics_url, set: (v) => patch({ calendar_ics_url: v }) }, { key: "lead_min", label: "How long before (minutes)", type: "number", get: () => S().calendar_reminder_lead_min, set: (v) => patch({ calendar_reminder_lead_min: v }) }], note: () => (S().calendar_ics_url ? `${cal.length} events read.` : "Paste the link of a calendar (.ics) in the setting below.") },
+    { id: "ics-calendar", kind: "wasm", name: "Calendar", description: "A calendar for the island: the events of a calendar link (.ics: Google Calendar, Outlook, iCloud), a month view you open from the date in the head, the next ones on a card, and a banner shortly before one starts.", sees: [["network", "the address you give it (\"Calendar link (.ics)\")"], ["calendar"]], on: () => !!S().calendar_ics_url, set: (v) => patch({ calendar_ics_url: v ? "https://calendar.google.com/calendar/ical/you%40example.com/private-demo/basic.ics" : "" }), settings: [{ key: "url", label: "Calendar link (.ics)", type: "text", get: () => S().calendar_ics_url, set: (v) => patch({ calendar_ics_url: v }) }, { key: "lead_min", label: "How long before (minutes)", type: "number", get: () => S().calendar_reminder_lead_min, set: (v) => patch({ calendar_reminder_lead_min: v }) }], note: () => (S().calendar_ics_url ? `${cal.length} events read.` : "Paste the link of a calendar (.ics) in the setting below.") },
   ];
   const info = (id) => BUILT_IN.find((p) => p.id === id);
   const isOn = (id) => (info(id)?.on ? !!info(id).on() : local[id] !== false);
@@ -748,6 +749,12 @@
     const p = info(id);
     if (p?.set) p.set(on);
     else local[id] = on;
+    NADI.emit("plugins-changed", null);
+  };
+  // how the user arranged the head (the app keeps it in a file)
+  C.head_layout_get = () => W.headLayout ?? null;
+  C.head_layout_set = ({ layout }) => {
+    W.headLayout = layout ?? null;
   };
   C.plugin_value = ({ id, key, value }) => info(id)?.settings?.find((x) => x.key === key)?.set(value);
   C.plugin_mute = () => {};
@@ -791,7 +798,7 @@
       const when = (e) => `{when:${e.start_ms}${e.all_day ? ":day" : ""}}`;
       if (events.length) {
         const [first, ...rest] = events;
-        plugins.push({ plugin: "ics-calendar", name: "ICS Calendar", icon: "calendar", rank: 45, title: first.summary, sub: when(first), peek: "", body: rest.length ? [{ kind: "list", rows: rest.map((e) => ({ title: e.summary, sub: when(e), progress: null })) }] : [] });
+        plugins.push({ plugin: "ics-calendar", name: "Calendar", icon: "calendar", rank: 45, title: first.summary, sub: when(first), peek: "", body: rest.length ? [{ kind: "list", rows: rest.map((e) => ({ title: e.summary, sub: when(e), progress: null })) }] : [] });
       }
     }
     return { plugins, cards, rings: {}, pills: [] };

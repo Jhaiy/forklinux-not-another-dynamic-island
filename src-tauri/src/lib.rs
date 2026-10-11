@@ -5,9 +5,12 @@ mod background;
 mod calendar;
 mod exeinfo;
 mod floats;
+mod modal;
+mod repo;
 mod focus;
 mod formats;
 mod gpu;
+mod head;
 mod media;
 mod notify;
 mod builtin;
@@ -57,6 +60,8 @@ const BRIEF_SIZE: (f64, f64) = (IDLE_SIZE.0, 40.0);
 const HUB_WIDTH: f64 = 420.0;
 const HUB_MIN_H: f64 = 150.0;
 const HUB_MAX_H: f64 = 520.0;
+/// edit mode has no cards, but a tray, and rows at the top and at the bottom: it may be taller
+const HUB_EDIT_MAX_H: f64 = 720.0;
 const HUB_SIZE: (f64, f64) = (HUB_WIDTH, HUB_MAX_H);
 
 #[derive(PartialEq, Clone, Copy)]
@@ -297,8 +302,9 @@ fn toggle_pin(window: WebviewWindow) {
 }
 
 #[tauri::command]
-fn set_hub_height(window: WebviewWindow, h: f64) {
-    let h = h.clamp(HUB_MIN_H, HUB_MAX_H).round() as u32;
+fn set_hub_height(window: WebviewWindow, h: f64, edit: Option<bool>) {
+    let max = if edit == Some(true) { HUB_EDIT_MAX_H } else { HUB_MAX_H };
+    let h = h.clamp(HUB_MIN_H, max).round() as u32;
     window.state::<Arc<IslandState>>().hub_height.store(h, Ordering::Relaxed);
 }
 
@@ -329,18 +335,22 @@ fn open_notification_action(window: WebviewWindow, action: String) {
     window.state::<Arc<IslandState>>().notif.lock().unwrap().dismiss_current();
 }
 
-/// The banner on screen was clicked: run its action (if it has one) and be done with it, both the
-/// banner and its entry in the hub's scrollback.
+/// The banner on screen was clicked: it ends, and the island expands (the page scrolls to the notification in the list).
+/// The notification stays in the list.
 #[tauri::command]
-fn click_notification(window: WebviewWindow, id: u64, action: Option<String>) {
-    if let Some(action) = action {
-        open_notification_action(window.clone(), action);
-    }
+fn open_hub_at_notification(window: WebviewWindow) {
+    let state = window.state::<Arc<IslandState>>();
+    state.notif.lock().unwrap().dismiss_current();
+    state.hub_open.store(true, Ordering::Relaxed);
+    state.shown.store(true, Ordering::Relaxed);
+}
+
+#[tauri::command]
+fn clear_notifications(window: WebviewWindow) {
     let state = window.state::<Arc<IslandState>>();
     let history = {
         let mut notif = state.notif.lock().unwrap();
-        notif.remove(id);
-        notif.dismiss_current();
+        notif.clear_history();
         notif.history()
     };
     let _ = window.emit("notification-history-tick", history);
@@ -1082,6 +1092,8 @@ pub fn run() {
             builtin::look::look_state,
             plugins::plugin_list,
             plugins::plugin_set,
+            head::head_layout_get,
+            head::head_layout_set,
             native::plugin_call,
             native::plugin_pills,
             plugins::plugin_value,
@@ -1097,7 +1109,8 @@ pub fn run() {
             set_hub_height,
             open_notification_action,
             dismiss_notification,
-            click_notification,
+            open_hub_at_notification,
+            clear_notifications,
             floats::float_begin,
             floats::float_ready,
             floats::float_list,
@@ -1108,6 +1121,11 @@ pub fn run() {
             floats::float_monitors,
             floats::float_typing,
             floats::float_backdrop,
+            modal::modal_open,
+            modal::modal_close,
+            modal::modal_result,
+            repo::repo_look,
+            repo::repo_install,
             focus::focus_source,
             toggle_pin,
             settings::get_settings,

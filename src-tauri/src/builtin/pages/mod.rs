@@ -3,8 +3,9 @@
 //!
 //! The window title only names the page, so the rest comes from the browser extension (the `nadi-chrome` repo): the
 //! page describes itself, exactly, and costs the browser next to nothing (see `ext`, the link to the extension, which
-//! this plugin owns). Without the extension connected, a browser is not read at all: the card shows what the window
-//! title says and nothing more.
+//! this plugin owns). Without the extension connected, a browser is not read at all, and there is no card. A page also has
+//! a card only when the island knows what kind of page it is (a walkthrough, a post, an article, ...): any other page
+//! is not worth one.
 //!
 //! Private windows, blocked sites (banking, mail, health, your own list) and pages the extension did not describe (a
 //! sign-in page) are never shown.
@@ -305,8 +306,9 @@ impl Reader {
                 continue;
             }
             let info = infos.get(&browse_key(&exe, &title)).cloned().unwrap_or_default();
-            // (a video has no page card: the media card covers it)
-            if info.blocked || info.is_empty() || info.kind.as_ref().map_or(false, |k| k.id == "video") {
+            // (a page the island does not know the kind of is not worth a card: only a walkthrough, a post, an article,
+            // ... is. A video has none either: the media card covers it)
+            if info.blocked || info.kind.as_ref().map_or(true, |k| k.id == "video") {
                 continue;
             }
             let app_name = if app.is_empty() { exe_stem(&exe) } else { app };

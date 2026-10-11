@@ -20,7 +20,7 @@ There are three kinds:
   paths, performance counters, other programs' files and logins, the browser extension. See [The native plugins](#the-native-plugins).
 
 A declarative plugin and a module are the same to the island whether they sit in a folder or are carried by the app: the
-*Time* and *ICS Calendar* plugins that come with it are two modules. Nothing in the
+*Time* and *Calendar* plugins that come with it are two modules. Nothing in the
 host knows them by name. They go through the same checks, the same sandbox, the same list, the same switch and the same
 question before they are switched on as a plugin you drop in a folder. The difference is only that the app carries them (an
 update brings their new version) and that you can switch them off but not delete them.
@@ -66,29 +66,116 @@ source, to read and to copy from. The plugins the app carries are in the same li
 |---|---|---|---|
 | Games | native | the game you are playing, for how long, and how it runs (FPS, GPU, CPU, memory); a pill | which programs fill a screen with no title bar; Windows' own counters |
 | Work | native | what you work on: your editor, your hours; a pill for the session you are in | the window in front and its title, how long since you touched the keyboard, git for the open project |
-| Page Reader | native | a card for each page you have open; the page in front of you, named | the browser windows, and what the NADI browser extension sends (never a private window or a blocked site) |
+| Page Reader | native | a card in the expanded island for each page you have open (a walkthrough, a post, an article...; a page of no known kind has none) | the browser windows, and what the NADI browser extension sends (never a private window or a blocked site) |
 | Downloads | native | what the browsers, Steam and qBittorrent are downloading | partial files in the download folders, the browsers' history, qBittorrent's own files |
 | Claude Code | native | your sessions, and a pill when one needs you or has finished; the 5-hour and 7-day limits as two rings in the hub, with a peek | Claude Code's own session files; for the rings, its own sign-in to Claude (kept encrypted for your Windows user; Claude Code's login is never read), and it asks Anthropic and nothing else |
-| Eyes | native | the two eyes of the island: they blink, follow the cursor, squash and stretch, and can bounce to the beat and send out a ripple for each hit of the bass | where the cursor is; the sound levels |
+| Eyes | native | the two eyes of the island, a widget of the head (they blink, follow the cursor, squash and stretch, and can bounce to the beat and send out a ripple for each hit of the bass), and the face of the collapsed island | where the cursor is; the sound levels |
+| System meters | native | rings in the head for how busy the CPU, the memory and the graphics card are (a widget each) | Windows' own counters |
 | Sound light | native | an aura in the island that dances to what plays (with a most-brightness setting: 0 turns it off), and spills a little outside it | the sound levels |
 | Now playing | native | what is playing, with play, skip, seek, speed; a pill | what Windows says is playing |
 | Notification mirror | native | other apps' notifications on the island | Windows' notification access; Viber's popup |
 | Time | module | the time now and then, in a small pill (`plugins/time`) | the clock |
-| ICS Calendar | module | brings the events of a calendar link to the calendar, lists the next ones on a card, and gives a banner shortly before one (`plugins/ics-calendar`) | the one address you give it; the island's calendar |
+| Calendar | module | brings the events of a calendar link to the island's calendar, a month view that the date in the head opens, the next ones on a card, and a banner shortly before one (`plugins/ics-calendar`) | the one address you give it; the island's calendar |
 
 Each of them can be switched off, and one that is off does nothing: no thread works, no file is read, nothing is asked of Windows
-and its card and its pill are gone. A plugin takes over what the old settings file said about it the first time it is seen (a
-game switch that was off stays off; a calendar link that was set switches ICS Calendar on; the agenda it used to be next to is part of it now).
+and its card, its pill and its widgets are gone. **A new install starts blank**: every plugin is off, and the expanded island says
+so, with a button to the plugin list. An install that has run before keeps what it had: a plugin takes over what the old
+settings file said about it the first time it is seen (a game switch that was off stays off; a calendar link that was set
+switches Calendar on, and the agenda it used to be next to is part of it now; the CPU and RAM rings stay on).
 
 ### What stays in the island
 
-* **The windows**: the pill (and the order its views take: a banner, then the highest pill a plugin offers, then the eyes), the hub,
-  the banners with their priority and do not disturb, the floating cards.
-* **The calendar**: the month view and the store of events. Whoever has events brings them (the ICS Calendar plugin does; so can a
-  module, see `events` below), and whoever works from them takes them (the card and reminders of ICS Calendar do).
-* **The eyes and the light**, which follow the sound and what is playing.
+* **The windows**: the pill (and the order its views take: a banner, then the highest pill a plugin offers, then what the island
+  shows by itself), the hub, the banners with their priority and do not disturb, the floating cards.
+* **The head** and **foot** of the hub, which are rows (see below). Settings are opened from the tray icon's menu.
+* **The store of calendar events**, which is only plumbing: whoever has events brings them (the Calendar plugin does; so can a
+  module, see `events` below), and whoever works from them takes them (the card and reminders of Calendar do). The month view is
+  the Calendar plugin's page.
 * **The sensors** the plugins read: the sound, the media session, the list of windows. A plugin sees one only after you allowed it.
-* The system rings (CPU, memory, GPU) and the notification list.
+* The notification list.
+
+### The head, its widgets and its pages
+
+The top of the expanded island is **rows**, and so can be its bottom, under the cards. Every row has a left, a center and a right place, and the plugins fill them with
+**widgets**: the eyes (a widget of the Eyes plugin), the date and the time (of Calendar), three thin bars for the CPU, the memory
+and the GPU (of System meters), two labelled bars for the Claude limits (of Claude Code), and the rings any plugin adds. A plugin
+may offer **as many widgets as it likes**: System meters and Claude Code also offer a ring for each number. The ones that
+`start` are in the head the first time; the rest wait in the tray of edit mode. Widgets start at the top; the bottom is empty
+until you drop a widget there.
+
+* Every widget is shown. When they do not fit in the first row, the head grows another, as many as it takes.
+* The center of a row is at its dead center. The two sides share what is left of it, equally, and a side only grows up to that
+  half, so the center never moves for a side. A row with nothing in the center has none, and the two sides share the whole row.
+* **Edit mode** (the pencil in the settings' tab row) lets you arrange it: drag a widget to the left, center or right of any row
+  (it is refused, in red, when there is no room; the rows of the bottom of the island are under the cards), or drag it off the
+  island to put it back in the tray. The **tray** lists every widget of the plugins that are on, by plugin: drag one onto a place
+  (or press it, and it goes to its own place of the first row). It keeps one height and scrolls inside itself; a group folds
+  (the first two start open), a search cuts it down by the widget's or the plugin's name, and "Hide in use" folds away what is
+  placed already. Add a row, or Reset (which puts back only the widgets that start in the head). What you arranged is kept in
+  `%APPDATA%\NADI\head.json`; a widget that starts, and that a plugin adds later, takes its own place, and one whose plugin is
+  off is not drawn.
+* A widget may open a **page**: the date opens the month view in place of the cards, and pressing it again brings the cards back.
+
+For a plugin written in Rust (a native one), a widget is `head.register({ id, plugin, name, place, rank, width, start, preview, build })` in its
+file in `ui/plugins/` (see `eyes.js`, `system-meters.js` and `calendar.js`): `start: false` keeps it in the tray until the user
+places it, and `preview()` gives the still picture its tile shows. A ring is `addRing(key, color, plugin, rank, start)`.
+A widget's tooltip is `host.setTip(el, content)`: a string is a headline with its note under it, and anything else is drawn as it is,
+an element or a function that makes one each time the tooltip shows (`tipRows(rows, { title, foot })` in `kit.js` makes a table
+of labels, numbers, bars and notes, as the bars of System meters and Claude usage do). A
+declarative plugin's `rings` (see below) are widgets of the right side already. Widgets for the other kinds of plugin are not
+open yet: they are drawn by the island from the blocks the plugin gives.
+
+## Modals, and plugins from a repository
+
+### A modal
+
+A **modal** is a small window the island opens: you move it by its bar, it snaps to the edges of the screen and to other modals, and it
+says whose it is. It lives on the same layer as the floating cards (so it never takes the focus of a game, except while you type in
+one of its fields, and over a fullscreen game it lets the clicks through until you hold the Fullscreen Guard's key). Nobody draws a
+modal but the island: the one who asks describes it (a **spec**) and gets the answer back as an event.
+
+A spec has a `title`, `blocks` and up to three `buttons`; it may have a `width` (280 to 520 px), a `busy` line (the buttons wait), and
+`at`, where it opens the first time: `"center"` (the default: the middle of the screen the island is on), `"island"` (beside it),
+`"cursor"`, an edge or a corner (`"top"`, `"bottom-right"`...), or `{ "x": 0.5, "y": 0.3 }` (where its middle goes, as a part of the
+screen). After you have moved a modal, one of its kind opens where you left it.
+
+| block | what it is | what comes back |
+|---|---|---|
+| `{ "text": "...", "kind": "title" \| "muted" \| "note" \| "warn" }` | a paragraph | |
+| `{ "facts": [{ "title", "text" }] }` | a title in a face of its own, and what it means | |
+| `{ "field": "name", "label", "value", "placeholder", "focus" }` | one line of text | `values.name` |
+| `{ "choice": "name", "options": [{ "id", "label" }], "value" }` | a few options, one picked | `values.name`: its id |
+| `{ "list": "name", "items": [{ "id", "label", "sub" }], "value" }` | rows, one picked | `values.name`: its id |
+| `{ "progress": 0.4, "text": "..." }` | a bar (`null`: moving) | |
+
+A button is `{ "id", "label", "primary", "danger", "stay" }`: pressing it closes the modal, unless it `stay`s (the one who asked answers
+with the next step, which replaces the window).
+
+**A module** answers a call with `"modal": { ... }` (the same spec; `null` closes it), and is told what was pressed by an `action` event
+with `action == "modal"` and `args == { "button", "values", "closed" }`. It has one modal at a time. Its blocks are `text`, `facts`,
+`field`, `choice`, `list` and `progress`; the island puts the plugin's name on the bar, so a plugin cannot pass for the island or for
+another plugin, and a plugin that is switched off loses its modal. A modal asks for no permission: it only shows words and takes
+answers. In Rust: `Reply::modal(Modal::new("Snooze").text("For how long?").choice(...).primary("snooze", "Snooze"))` (see
+`plugins/busy-meter`).
+
+**A face** (a native plugin's file in `ui/plugins/`) uses `openModal(spec, onResult)` and `askModal(spec)` from `kit.js`; the blocks
+are the same, and `checks` too (rows with a tickbox, a tile, badges and a note: the list of plugins in a repository is one).
+
+### Plugins from a repository
+
+Settings > Plugins has a `+`: *Add plugins from GitHub*. Paste `owner/repo` (or the repository's address, or a link to a release or a
+branch) and NADI looks in it: it downloads it once from github.com (a release's `nadi-plugins.tar.gz` when it has one, else the archive
+of its latest release, else of its default branch; at most 20 MB, over https, and nothing else is asked), reads it in memory and shows
+every plugin in it, what each asks for, and what is wrong with the ones that cannot be installed. You tick what you want; they are
+installed **switched off** (the same question as for any plugin comes when you switch one on), with a note of where they came from, and
+sit together in the list under the repository's name. *Check for updates* looks in the repository again.
+
+A repository needs no special file. **Every folder with a `manifest.json`, up to three folders down, is one plugin**, with the files
+directly in it. A module needs its built `.wasm` beside the manifest: NADI never builds anything, so a repository builds them (a
+workflow) and attaches `nadi-plugins.tar.gz` to a release, or commits them. An optional `nadi-plugins.json` at the top gives the list a
+`name` and an `about`, an `order` (ids that come first) and `hidden` (ids kept out); it can never add a permission or an address, those
+come from each manifest. A plugin whose id is one of the app's, or one that is already on the PC from somewhere else, is shown and left
+alone.
 
 ## The manifest (declarative)
 
@@ -279,7 +366,7 @@ to that call as `{ "text": ... }`.
 A module cannot list `net`: nothing that hears or sees the PC can also reach the network. One exception, which sends nothing out: a
 module may name a calendar link (`source.http` with `"format": "ics"`, the address a `{{settings.url}}` setting holds, and `net` for
 that host only). The island reads the link with a plain request to that one address and brings its events to the calendar; the
-module makes no request, and gets only the events. This is how *ICS Calendar* works.
+module makes no request, and gets only the events. This is how *Calendar* works.
 
 ### The interface
 
@@ -321,7 +408,7 @@ import nothing. The event and the answer are JSON.
 
 * `tz_offset` is how far this PC's clock is from UTC, in minutes: a module has no time zone, and `now` is UTC. (The SDK's
   `ev.local()` gives the date and the time of day.)
-* `events` brings events to the island's calendar (the month view, and the *ICS Calendar* card and reminders work from it too). A module that
+* `events` brings events to the island's calendar (the month view, and the *Calendar* card and reminders work from it too). A module that
   says `events` again replaces what it brought; `"events": null` takes them away; they go with the module when it is switched off.
   At most 500 events, each with a summary of up to 200 characters.
 * `wake_ms` asks to be called again after that long (50 ms to a day): a module that keeps time asks for the next minute and

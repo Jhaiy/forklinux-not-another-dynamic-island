@@ -6,10 +6,10 @@
 export const { invoke } = window.__TAURI__.core;
 const { listen: listenAll } = window.__TAURI__.event;
 // The floating cards live in a second window that runs this same page (see floats.rs): it draws nothing but
-// those cards, so it only listens for its own events and skips the island's animations and polling.
+// those cards (and the modals, see modal.rs), so it only listens for its own events and skips the island's animations and polling.
 export const FLOATS = new URLSearchParams(location.search).has("floats");
 export const listen = FLOATS
-	? (name, cb) => (name.startsWith("float-") ? listenAll(name, cb) : Promise.resolve(() => {}))
+	? (name, cb) => (name.startsWith("float-") || name.startsWith("modal-") ? listenAll(name, cb) : Promise.resolve(() => {}))
 	: listenAll;
 
 /** the island's view now ("idle", "hub", a plugin's pill...): main.js keeps it */
@@ -18,9 +18,22 @@ export const view = { name: "idle" };
 /** a call to a plugin: a native plugin's command (see native.rs), or a button's action for a module (it is sent the action) */
 export const call = (id, cmd, args = null) => invoke("plugin_call", { id, cmd, args });
 
+/** what the head (head.js) listens to from the files below it: a ring a plugin adds becomes a widget */
+export const hooks = { ringAdded: null };
+
 export const host = {
+	/** show one of the hub's panes ("info", "settings", or a plugin's page) */
+	setPane() {},
+	/** the pane the hub shows now */
+	pane: () => "info",
 	scheduleHubHeight() {},
 	refreshTip() {},
+	/**
+	 * What the tooltip of an element says. A string is a headline, and the rest of it under (as `data-tip`
+	 * says it). Anything else is drawn as it is: an element, or a function that makes one (it is called each time the
+	 * tooltip is shown or refreshed, so it can say what is true now). See `tipRows` for a table of numbers.
+	 */
+	setTip() {},
 	/** the list of cards must be built again, not just updated */
 	invalidate() {},
 	/** fetch the cards now (after a click that changed something) */
@@ -28,6 +41,40 @@ export const host = {
 	/** play the entrance of a pill that the island has just moved to */
 	enter() {},
 };
+
+/**
+ * A tooltip made of rows, for `host.setTip`: each row is `{ label, value, pct, color, note }` (a label and a value on a line,
+ * a bar when it has `pct`, a small note under it); `foot` is a last line, and `title` a first one.
+ */
+export function tipRows(rows, { title, foot } = {}) {
+	const box = el("div", "tip-rows");
+	if (title) box.append(el("div", "tip-title", title));
+	for (const r of rows) {
+		const row = el("div", "tip-row");
+		const line = el("div", "tip-line");
+		const lab = el("span", "tip-lab");
+		if (r.color) {
+			const dot = el("span", "tip-dot");
+			dot.style.background = r.color;
+			lab.append(dot);
+		}
+		lab.append(document.createTextNode(r.label));
+		line.append(lab, el("span", "tip-val", r.value ?? ""));
+		row.append(line);
+		if (r.pct != null) {
+			const bar = el("div", "tip-bar");
+			const fill = el("u");
+			fill.style.width = `${Math.max(0, Math.min(100, r.pct))}%`;
+			fill.style.background = r.color || "var(--fg)";
+			bar.append(fill);
+			row.append(bar);
+		}
+		if (r.note) row.append(el("div", "tip-note", r.note));
+		box.append(row);
+	}
+	if (foot) box.append(el("div", "tip-foot", foot));
+	return box;
+}
 
 // cards the user has opened (all start collapsed); kept by key so a re-render keeps them open
 export const openCards = new Set();
@@ -457,7 +504,60 @@ export function setMarquee(box, text) {
 	});
 }
 
-// ---- the rings at the top right of the hub: a plugin may add its own (see `addRing`)
+// ---- modals: small windows that float over the desktop, drawn by the island from a description (see modal.js and modal.rs)
+const modalOpen = new Map();
+let modalWired = false;
+
+function wireModals() {
+	if (modalWired || FLOATS) return;
+	modalWired = true;
+	listen("modal-result", (e) => {
+		const { id, button, values, closed } = e.payload;
+		const m = modalOpen.get(id);
+		if (!m) return;
+		if (closed) modalOpen.delete(id);
+		m.onResult?.(button, values || {}, m.api, !!closed);
+	});
+}
+
+/**
+ * Open a modal: `spec` is what modal.js describes. `onResult(button, values, api, closed)` is told when a button is pressed
+ * (or the cross: button "close"); `api.update(spec)` shows the next step in the same window, `api.close()` closes it.
+ * Resolves with the api, or null when there is no window to show it on.
+ */
+export async function openModal(spec, onResult) {
+	wireModals();
+	const id = spec.id;
+	const api = {
+		id,
+		update: (next) => invoke("modal_open", { spec: { ...next, id } }).catch(() => false),
+		close: () => {
+			modalOpen.delete(id);
+			invoke("modal_close", { id }).catch(() => {});
+		},
+	};
+	modalOpen.set(id, { onResult, api });
+	let ok = false;
+	try {
+		ok = await invoke("modal_open", { spec });
+	} catch (_) {}
+	if (!ok) {
+		modalOpen.delete(id);
+		return null;
+	}
+	return api;
+}
+
+/** Ask a question in a modal: resolves with `{ button, values }` of the first button pressed, or null when it cannot be shown. */
+export function askModal(spec) {
+	return new Promise((resolve) => {
+		openModal(spec, (button, values) => resolve({ button, values })).then((api) => {
+			if (!api) resolve(null);
+		});
+	});
+}
+
+// ---- the rings of the head of the hub: a plugin may add its own (see `addRing`); each is a widget (see head.js)
 export const ringEls = {};
 
 /** an element that is a ring (the static ones in the page, and those a plugin adds) */
@@ -475,14 +575,19 @@ export function ringFrom(el) {
 	return ringEls[key];
 }
 
-/** a ring of the plugin's own, at the left of the others; hidden until it has something to say (`setRing`, then show) */
-export function addRing(key, color) {
+/**
+ * A ring of the plugin's own: a widget for the right of the head (`rank`: its order among the others; a lower one is
+ * further left). It takes no room until it has something to say (`setRing`, then take `hidden` off). `start`: false keeps
+ * it in the tray of edit mode until the user places it.
+ */
+export function addRing(key, color, plugin = null, rank = 50, start = true) {
 	const el = document.createElement("span");
 	el.className = "ring-wrap hidden";
 	el.id = `ring-${key}`;
 	el.dataset.color = color;
-	document.getElementById("hub-rings").prepend(el);
-	return ringFrom(el);
+	const ring = ringFrom(el);
+	hooks.ringAdded?.(key, el, plugin, rank, start);
+	return ring;
 }
 
 export function setRing(key, pct, tooltip) {

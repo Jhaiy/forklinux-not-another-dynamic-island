@@ -108,37 +108,6 @@ pub struct ExtVideo {
     pub rate: f32,
 }
 
-/// one comment of a post, as the page shows it
-#[derive(Deserialize, Default, Clone, Debug)]
-#[serde(default)]
-pub struct SocialComment {
-    pub a: String,
-    pub t: String,
-    pub s: Option<f64>,
-    pub d: u8,
-    pub op: bool,
-    pub at: Option<String>,
-}
-
-/// a post (Reddit, X, Hacker News) and the comments the page has loaded
-#[derive(Deserialize, Default, Clone, Debug)]
-#[serde(default)]
-pub struct Social {
-    pub site: String,
-    pub author: Option<String>,
-    pub handle: Option<String>,
-    pub community: Option<String>,
-    pub posted: Option<String>,
-    pub text: Option<String>,
-    pub up: Option<f64>,
-    pub comments: Option<f64>,
-    pub reposts: Option<f64>,
-    pub likes: Option<f64>,
-    pub views: Option<f64>,
-    pub sort: Option<String>,
-    pub list: Vec<SocialComment>,
-}
-
 /// A section of a guide (or an entry of its contents) the page names: where it is and what it is called.
 #[derive(Serialize, Deserialize, Default, Clone, Debug)]
 #[serde(default)]
@@ -193,7 +162,6 @@ pub struct ExtData {
     pub ld: Vec<LdItem>,
     pub video: Option<ExtVideo>,
     pub words: u32,
-    pub social: Option<Social>,
 }
 
 #[derive(Deserialize, Default)]
@@ -224,7 +192,6 @@ struct PageMsg {
     ld: Vec<LdItem>,
     video: Option<ExtVideo>,
     nodes: Vec<NodeMsg>,
-    social: Option<Social>,
     guide: Option<Guide>,
     /// the page's main picture, shrunk by the extension: a `data:image/jpeg;base64,...` address
     image: Option<String>,
@@ -661,7 +628,7 @@ fn handle(ext_state: &Arc<ExtState>, id: &mut u64, tx: &mpsc::Sender<String>, te
                 url: m.url.clone(),
                 title: m.title.clone(),
                 page: to_page(&m),
-                data: ExtData { meta: m.meta, ld: m.ld, video: m.video, words: m.words, social: m.social, guide: m.guide.take().and_then(Guide::seal) },
+                data: ExtData { meta: m.meta, ld: m.ld, video: m.video, words: m.words, guide: m.guide.take().and_then(Guide::seal) },
                 image,
                 version,
             };

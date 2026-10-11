@@ -1,7 +1,7 @@
 {
   "id": "ics-calendar",
-  "name": "ICS Calendar",
-  "description": "Brings the events of a calendar link (.ics: Google Calendar, Outlook, iCloud) to the island's calendar, shows the next ones on a card, and reminds you with a banner shortly before one starts.",
+  "name": "Calendar",
+  "description": "A calendar for the island: the events of a calendar link (.ics: Google Calendar, Outlook, iCloud), a month view you open from the date in the head, the next ones on a card, and a banner shortly before one starts.",
   "version": "3.0.0",
   "kind": "wasm",
   "module": "ics-calendar.wasm",

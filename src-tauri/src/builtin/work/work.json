@@ -3,7 +3,7 @@
   "name": "Work",
   "description": "What you work on: your editor, your hours, and a pill for the session you are in.",
   "version": "1.0.0",
-  "default_on": true,
+  "default_on": false,
   "permissions": {
     "sees": [
       { "name": "windows" },

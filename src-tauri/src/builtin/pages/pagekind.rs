@@ -12,13 +12,10 @@
 //! Below `MIN_CONFIDENCE` nothing is claimed and the card stays a plain page card. Everything here is pure:
 //! it takes what was read and returns what to show, so it is tested without a browser.
 
-use super::ext::Social;
 use super::page::{Node, NodeKind, Page};
 use serde::Serialize;
 
 pub const MIN_CONFIDENCE: f32 = 0.6;
-/// comments of a post that are passed on to the card
-const THREAD_COMMENTS: usize = 12;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind {
@@ -32,10 +29,9 @@ pub enum Kind {
     Product,
     Search,
     WebApp,
-    Social,
 }
 
-const KINDS: [Kind; 11] = [
+const KINDS: [Kind; 10] = [
     Kind::Walkthrough,
     Kind::Wiki,
     Kind::News,
@@ -46,7 +42,6 @@ const KINDS: [Kind; 11] = [
     Kind::Product,
     Kind::Search,
     Kind::WebApp,
-    Kind::Social,
 ];
 
 impl Kind {
@@ -65,7 +60,6 @@ impl Kind {
             Kind::Product => "product",
             Kind::Search => "search",
             Kind::WebApp => "webapp",
-            Kind::Social => "social",
         }
     }
     pub fn label(self) -> &'static str {
@@ -80,7 +74,6 @@ impl Kind {
             Kind::Product => "Product page",
             Kind::Search => "Search results",
             Kind::WebApp => "Web app",
-            Kind::Social => "Social post",
         }
     }
 }
@@ -102,39 +95,6 @@ pub struct PageField {
     pub rough: bool,
 }
 
-/// One comment of a post, ready to draw.
-#[derive(Serialize, Clone, Debug)]
-pub struct ThreadComment {
-    pub who: String,
-    pub text: String,
-    pub score: Option<String>,
-    /// the score is a like, not a vote
-    pub heart: bool,
-    pub depth: u8,
-    pub op: bool,
-    pub ago: Option<String>,
-}
-
-#[derive(Serialize, Clone, Debug)]
-pub struct ThreadStat {
-    pub icon: &'static str,
-    pub value: String,
-}
-
-/// A post with its numbers and the comments the page has loaded: the browsing card draws it read-only.
-#[derive(Serialize, Clone, Debug)]
-pub struct Thread {
-    pub who: Option<String>,
-    pub handle: Option<String>,
-    pub ago: Option<String>,
-    pub chip: Option<String>,
-    pub lead: Option<String>,
-    pub stats: Vec<ThreadStat>,
-    pub sort: Option<String>,
-    pub comments: Vec<ThreadComment>,
-    pub total: Option<u32>,
-}
-
 #[derive(Serialize, Clone, Debug)]
 pub struct PageKind {
     pub id: &'static str,
@@ -147,8 +107,6 @@ pub struct PageKind {
     /// how far down the page you are, 0..1
     /// what the collapsed card says at its right
     pub peek: Option<String>,
-    /// a post and its comments (social pages the extension described)
-    pub thread: Option<Thread>,
     /// a guide laid out to be read: the card asks for its words by `key` (see `ext::Guide`)
     pub guide: Option<GuideRef>,
 }
@@ -359,24 +317,6 @@ fn vote_url(v: &mut Votes, u: &Url) {
     if host_is(u, "quora.com") {
         v.add(Kind::Qna, 0.6);
     }
-    // social posts: a thread with votes and replies, not a Q&A page
-    if host_is(u, "reddit.com") && has(p, "/comments/") {
-        v.add(Kind::Social, 0.85);
-    } else if host_is(u, "reddit.com") {
-        v.add(Kind::Social, 0.35);
-    }
-    if (host_is(u, "twitter.com") || host_is(u, "x.com")) && has(p, "/status/") {
-        v.add(Kind::Social, 0.85);
-    } else if host_is(u, "twitter.com") || host_is(u, "x.com") {
-        v.add(Kind::Social, 0.4);
-    }
-    if (host_is(u, "facebook.com") && has_any(p, &["/posts/", "/photo", "/reel", "/story/", "/watch"]))
-        || (host_is(u, "instagram.com") && (has(p, "/p/") || has(p, "/reel")))
-        || ((host_is(u, "threads.net") || host_is(u, "threads.com")) && has(p, "/post"))
-        || (host_is(u, "linkedin.com") && (has(p, "/posts/") || has(p, "/activity/")))
-    {
-        v.add(Kind::Social, 0.8);
-    }
     // references
     if (host_is(u, "mozilla.org") && has(p, "/docs/"))
         || host_is(u, "docs.rs")
@@ -477,15 +417,6 @@ fn vote_title(v: &mut Votes, title: &str) {
         v.add(Kind::Qna, 0.85);
     } else if has(&t, "- quora") {
         v.add(Kind::Qna, 0.7);
-    }
-    if has(&t, ": r/") || has(&t, " - r/") || has(&t, "reddit") {
-        v.add(Kind::Social, 0.7);
-    }
-    if has(&t, " on x:") || t.ends_with(" / x") {
-        v.add(Kind::Social, 0.7);
-    }
-    if has(&t, "facebook") || has(&t, "instagram") {
-        v.add(Kind::Social, 0.4);
     }
     if t.starts_with("how to ") || has_any(&t, &["tutorial", "step-by-step", "step by step", "getting started"]) {
         v.add(Kind::Walkthrough, 0.5);
@@ -604,27 +535,6 @@ fn vote_texts(v: &mut Votes, texts: &[(&str, Option<NodeKind>)], trust: f32) {
         v.add(Kind::Qna, w(0.2));
     }
 
-    // social: votes beside replies, and like/share rows under a post
-    let upvotes = count(&|t, _| has(t, "upvote") && t.len() < 40);
-    match upvotes {
-        0 => {}
-        1 => v.add(Kind::Social, w(0.3)),
-        _ => v.add(Kind::Social, w(0.55)),
-    }
-    let replies = count(&|t, k| matches!(k, Some(NodeKind::Button) | None) && t.len() < 24 && (t == "reply" || t.starts_with("reply ")));
-    if replies >= 2 {
-        v.add(Kind::Social, w(0.35));
-    }
-    if any(&|t, _| t.len() < 40 && t.chars().next().map_or(false, |c| c.is_ascii_digit()) && has_any(t, &[" comments", " comment,", " replies"])) {
-        v.add(Kind::Social, w(0.3));
-    }
-    if any(&|t, _| has(t, "repost") && t.len() < 40) {
-        v.add(Kind::Social, w(0.4));
-    }
-    if any(&|t, _| t.len() < 30 && t.chars().next().map_or(false, |c| c.is_ascii_digit()) && (has(t, " likes") || has(t, " shares"))) {
-        v.add(Kind::Social, w(0.3));
-    }
-
     // references
     let api = count(&|t, k| heading(k) && matches!(t.trim(), "parameters" | "return value" | "returns" | "syntax" | "examples" | "example" | "browser compatibility" | "specifications" | "arguments" | "throws" | "exceptions" | "see also" | "usage"));
     match api {
@@ -677,10 +587,6 @@ fn vote_texts(v: &mut Votes, texts: &[(&str, Option<NodeKind>)], trust: f32) {
 
 fn lines_of(nodes: &[Node]) -> Vec<(&str, Option<NodeKind>)> {
     nodes.iter().map(|n| (n.name.as_str(), Some(n.kind))).collect()
-}
-
-fn headings(nodes: &[Node]) -> Vec<&Node> {
-    nodes.iter().filter(|n| matches!(n.kind, NodeKind::Heading(_))).collect()
 }
 
 /// The page's text as paragraphs. The tree hands over text in runs (a link splits a sentence in three), so
@@ -846,150 +752,6 @@ fn query_of(url: &str) -> Option<String> {
     None
 }
 
-/// "12.4k upvotes", "128 comments", "1 like": the trimmed text, when it is just
-/// a number and a count word (singular or plural). Bare buttons ("Upvote",
-/// "Share") carry no number and give nothing.
-fn count_line(text: &str, words: &[&str]) -> Option<String> {
-    let t = text.trim();
-    if t.is_empty() || t.len() >= 40 {
-        return None;
-    }
-    let mut parts = t.split_whitespace();
-    let num = parts.next()?;
-    let word = lc(parts.next()?);
-    if parts.next().is_some() {
-        return None;
-    }
-    if !num.chars().next().map_or(false, |c| c.is_ascii_digit()) {
-        return None;
-    }
-    if !num.chars().all(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | 'k' | 'K' | 'm' | 'M')) {
-        return None;
-    }
-    let plural_y = |w: &&str| w.ends_with('y').then(|| format!("{}ies", &w[..w.len() - 1]));
-    words.iter().any(|w| word == *w || word == format!("{w}s") || plural_y(w).as_deref() == Some(word.as_str())).then(|| t.to_string())
-}
-
-/// where the comments start: a node of its own ("128 comments", "Comments").
-fn comments_at(nodes: &[Node]) -> Option<usize> {
-    nodes.iter().position(|n| {
-        let t = n.name.trim();
-        if t.is_empty() || t.len() >= 40 {
-            return false;
-        }
-        let l = lc(t);
-        l == "comments"
-            || l == "replies"
-            || ((l.ends_with(" comments") || l.ends_with(" comment") || l.ends_with(" replies"))
-                && t.chars().next().map_or(false, |c| c.is_ascii_digit() || c == '('))
-    })
-}
-
-/// the first three comments after the comments heading, top first. A Reply
-/// button ends the comment above it; inside a block the name ("u/name",
-/// "@handle") is the commenter and the long text is the comment. Block based
-/// instead of position based, so wrapped runs still read as one comment.
-fn top_comments(nodes: &[Node]) -> Vec<String> {
-    let Some(at) = comments_at(nodes) else { return Vec::new() };
-    let mut out: Vec<String> = Vec::new();
-    let mut author: Option<String> = None;
-    let mut body: Option<String> = None;
-    for n in &nodes[at + 1..] {
-        if out.len() >= 3 {
-            break;
-        }
-        let t = n.name.trim();
-        if t.is_empty() {
-            continue;
-        }
-        let l = lc(t);
-        // a Reply row ends the comment above it
-        if matches!(n.kind, NodeKind::Button) && (l == "reply" || l.starts_with("reply ")) {
-            push_comment(&mut out, &mut author, &mut body);
-            continue;
-        }
-        if !matches!(n.kind, NodeKind::Text | NodeKind::Link | NodeKind::Item) {
-            continue;
-        }
-        if author.is_none() && t.len() < 40 && (l.starts_with("u/") || l.starts_with('@')) && !t.contains(' ') && t.len() > 2 {
-            author = Some(t.to_string());
-            continue;
-        }
-        if is_ago(t) || is_byline(t) {
-            continue;
-        }
-        if t.chars().count() >= 30 {
-            match &mut body {
-                Some(b) => {
-                    b.push(' ');
-                    b.push_str(t);
-                }
-                None => body = Some(t.to_string()),
-            }
-        }
-    }
-    push_comment(&mut out, &mut author, &mut body);
-    out
-}
-
-/// one finished comment block becomes a card row.
-fn push_comment(out: &mut Vec<String>, author: &mut Option<String>, body: &mut Option<String>) {
-    if let Some(b) = body.take() {
-        out.push(match author.take() {
-            Some(a) => format!("{a} \u{2014} {}", short(&b, 130)),
-            None => short(&b, 140),
-        });
-    } else {
-        author.take();
-    }
-}
-
-/// "r/pics" from a title ("Post title : r/pics") or a short node.
-fn community_of(title: &str, nodes: &[Node]) -> Option<String> {
-    let from_title = title.find("r/").filter(|&i| i == 0 || matches!(title.as_bytes()[i - 1], b' ' | b':' | b'/' | b'(')).and_then(|i| {
-        let rest = &title[i..];
-        let mut name = String::new();
-        for (j, c) in rest.char_indices() {
-            if j < 2 {
-                name.push(c);
-                continue;
-            }
-            if c.is_alphanumeric() || c == '_' {
-                name.push(c);
-            } else {
-                break;
-            }
-        }
-        (name.len() > 2).then_some(name)
-    });
-    if from_title.is_some() {
-        return from_title;
-    }
-    nodes.iter().find_map(|n| {
-        let t = n.name.trim();
-        (t.len() > 2 && t.len() < 30 && t.starts_with("r/") && !t.contains(' ') && t[2..].chars().all(|c| c.is_alphanumeric() || c == '_')).then(|| t.to_string())
-    })
-}
-
-/// `Name on X: "the post" / X` -> the post itself.
-fn social_title(title: &str, nodes: &[Node]) -> String {
-    let t = title.trim();
-    if let Some(i) = lc(t).find(" on x: ") {
-        let mut rest = t[i + 7..].trim().to_string();
-        for suffix in [" / X", " / x"] {
-            if let Some(s) = rest.strip_suffix(suffix) {
-                rest = s.trim().to_string();
-                break;
-            }
-        }
-        let rest = rest.trim_matches('"').trim();
-        if rest.chars().count() >= 4 {
-            return rest.to_string();
-        }
-    }
-    h1_or_title(nodes, title)
-}
-
 /// What is worth saying about a page of this kind. `p` is the tree, if there was one.
 fn fields_for(kind: Kind, ev: &Evidence) -> (Vec<PageField>, String, String) {
     let title = strip_site(ev.title);
@@ -997,16 +759,6 @@ fn fields_for(kind: Kind, ev: &Evidence) -> (Vec<PageField>, String, String) {
     let nodes: &[Node] = ev.page.map_or(&empty[..], |p| &p.nodes[..]);
     let mut f: Vec<PageField> = Vec::new();
     let (main, mut sub);
-    let name_after = |label: &str| -> Option<String> {
-        let i = nodes.iter().position(|n| lc(&n.name).starts_with(label) && n.name.len() < 40)?;
-        let n = &nodes[i];
-        if let Some((_, v)) = n.name.split_once(':') {
-            if !v.trim().is_empty() {
-                return Some(short(v, 40));
-            }
-        }
-        nodes[i + 1..].iter().find(|x| x.kind == NodeKind::Text && x.name.len() < 40).map(|x| short(&x.name, 40))
-    };
 
     match kind {
         Kind::Walkthrough => {
@@ -1203,76 +955,6 @@ fn fields_for(kind: Kind, ev: &Evidence) -> (Vec<PageField>, String, String) {
                 f.push(field("Checks", short(n.name.trim(), 50), false));
             }
         }
-        Kind::Social => {
-            main = social_title(ev.title, nodes);
-            f.push(field("Post", short(&main, 70), false));
-            sub = "Social post".to_string();
-            // community and author straight from the address when it names them
-            let (mut url_community, mut url_author) = (None, None);
-            if let Some(u) = ev.url.and_then(parse_url) {
-                let segs: Vec<&str> = u.path.split('/').filter(|s| !s.is_empty()).collect();
-                if segs.get(0) == Some(&"r") && segs.get(1).map_or(false, |s| !s.is_empty()) {
-                    url_community = Some(format!("r/{}", segs[1]));
-                }
-                if segs.len() >= 3 && segs[1] == "status" {
-                    url_author = Some(format!("@{}", segs[0]));
-                }
-            }
-            let community = url_community.or_else(|| community_of(ev.title, nodes));
-            let author = url_author.or_else(|| {
-                nodes.iter().take(60).find_map(|n| {
-                    let a = n.name.trim();
-                    if a.len() >= 40 {
-                        return None;
-                    }
-                    lc(a).strip_prefix("posted by ").map(|a| a.trim().to_string()).filter(|a| !a.is_empty())
-                })
-            });
-            if let Some(a) = &author {
-                f.push(field("Author", short(a, 40), false));
-            }
-            if let Some(c) = &community {
-                f.push(field("Community", short(c, 40), false));
-            }
-            let votes = nodes.iter().find_map(|n| count_line(&n.name, &["upvote", "vote"]));
-            let likes = nodes.iter().find_map(|n| count_line(&n.name, &["like"]));
-            let comments_n = nodes.iter().find_map(|n| count_line(&n.name, &["comment", "reply"]));
-            let shares = nodes.iter().find_map(|n| count_line(&n.name, &["share", "repost"]));
-            let views = nodes.iter().find_map(|n| count_line(&n.name, &["view"]));
-            let score = votes.as_deref().or(likes.as_deref());
-            if let Some(s) = score {
-                f.push(field(if votes.is_some() { "Upvotes" } else { "Likes" }, short(s, 20), false));
-            }
-            if let Some(c) = &comments_n {
-                f.push(field("Comments", short(c, 20), false));
-            }
-            if let Some(s) = &shares {
-                f.push(field("Shares", short(s, 20), false));
-            }
-            if let Some(v) = &views {
-                f.push(field("Views", short(v, 20), false));
-            }
-            for (i, c) in top_comments(nodes).into_iter().take(3).enumerate() {
-                f.push(field(match i {
-                    0 => "Top 1",
-                    1 => "Top 2",
-                    _ => "Top 3",
-                }, c, false));
-            }
-            let mut stats: Vec<String> = Vec::new();
-            if let Some(c) = &community {
-                stats.push(short(c, 24));
-            }
-            if let Some(s) = score {
-                stats.push(short(s, 20));
-            }
-            if let Some(c) = &comments_n {
-                stats.push(short(c, 20));
-            }
-            if !stats.is_empty() {
-                sub = stats.join(" \u{b7} ");
-            }
-        }
     }
     let _ = &mut sub;
     (f, main.clone(), sub)
@@ -1299,7 +981,7 @@ pub fn read(ev: &Evidence) -> Option<PageKind> {
     if let Some(d) = ev.ext {
         enrich(kind, d, &mut fields, &mut main, &mut sub);
     }
-    let (mut peek, mut thread, mut guide) = (None, None, None);
+    let (mut peek, mut guide) = (None, None);
     if matches!(kind, Kind::Walkthrough | Kind::Wiki) {
         if let Some(g) = ev.ext.and_then(|d| d.guide.as_ref()) {
             // the section on screen is what a closed card says
@@ -1314,96 +996,7 @@ pub fn read(ev: &Evidence) -> Option<PageKind> {
             guide = Some(GuideRef { key: g.key.clone(), text: g.text });
         }
     }
-    if kind == Kind::Social {
-        if let Some(s) = ev.ext.and_then(|d| d.social.as_ref()) {
-            let t = thread_of(s);
-            sub = thread_sub(s);
-            peek = s.comments.map(|n| compact(n as u64));
-            thread = Some(t);
-        }
-    }
-    Some(PageKind { id: kind.id(), label: kind.label(), confidence: conf, fields, main, sub, peek, thread, guide })
-}
-
-// ---- a post and its comments -----------------------------------------------------------------------------------
-
-/// 4213 -> "4.2k", 412000 -> "412k", 1500000 -> "1.5M"
-fn compact(n: u64) -> String {
-    let one = |x: f64| {
-        let s = format!("{x:.1}");
-        s.strip_suffix(".0").unwrap_or(&s).to_string()
-    };
-    if n >= 1_000_000 {
-        format!("{}M", one(n as f64 / 1e6))
-    } else if n >= 10_000 {
-        format!("{}k", n / 1000)
-    } else if n >= 1000 {
-        format!("{}k", one(n as f64 / 1000.0))
-    } else {
-        n.to_string()
-    }
-}
-
-/// "r/pcmasterrace \u{b7} 4.2k \u{b7} 312 comments", the header's second line
-fn thread_sub(s: &Social) -> String {
-    let mut parts: Vec<String> = Vec::new();
-    match s.site.as_str() {
-        "x" => parts.extend(s.handle.clone()),
-        _ => parts.extend(s.community.clone()),
-    }
-    match s.site.as_str() {
-        "x" => parts.extend(s.likes.map(|n| format!("{} likes", compact(n as u64)))),
-        "hn" => parts.extend(s.up.map(|n| format!("{} points", compact(n as u64)))),
-        _ => parts.extend(s.up.map(|n| compact(n as u64))),
-    }
-    parts.extend(s.comments.map(|n| format!("{} {}", compact(n as u64), if s.site == "x" { "replies" } else { "comments" })));
-    if parts.is_empty() { "Social post".to_string() } else { parts.join(" \u{b7} ") }
-}
-
-fn thread_of(s: &Social) -> Thread {
-    let reddit = s.site == "reddit";
-    let x = s.site == "x";
-    let user = |a: &str| if reddit && !a.starts_with("u/") && !a.is_empty() { format!("u/{a}") } else { a.to_string() };
-    let mut stats: Vec<ThreadStat> = Vec::new();
-    let mut stat = |icon: &'static str, n: Option<f64>| {
-        if let Some(n) = n {
-            stats.push(ThreadStat { icon, value: compact(n as u64) });
-        }
-    };
-    if x {
-        stat("chat", s.comments);
-        stat("repost", s.reposts);
-        stat("heart", s.likes);
-        stat("eye", s.views);
-    } else {
-        stat("up", s.up);
-        stat("chat", s.comments);
-    }
-    let ago_of = |iso: &Option<String>| iso.as_deref().and_then(ago);
-    Thread {
-        who: s.author.as_deref().map(user),
-        handle: s.handle.clone(),
-        ago: ago_of(&s.posted),
-        chip: s.community.clone(),
-        lead: s.text.clone().filter(|t| !t.is_empty()),
-        stats,
-        sort: s.sort.clone(),
-        comments: s
-            .list
-            .iter()
-            .take(THREAD_COMMENTS)
-            .map(|c| ThreadComment {
-                who: user(&c.a),
-                text: c.t.clone(),
-                score: c.s.map(|n| compact(n as u64)),
-                heart: x,
-                depth: c.d.min(3),
-                op: c.op,
-                ago: ago_of(&c.at).map(|a| a.trim_end_matches(" ago").to_string()),
-            })
-            .collect(),
-        total: s.comments.map(|n| n as u32),
-    }
+    Some(PageKind { id: kind.id(), label: kind.label(), confidence: conf, fields, main, sub, peek, guide })
 }
 
 // ---- what the page says about itself (from the browser extension) ---------------------------------------------
@@ -1426,9 +1019,6 @@ fn vote_ext(v: &mut Votes, d: &super::ext::ExtData) {
                 "QAPage" | "Question" => v.add(Kind::Qna, 0.9),
                 "FAQPage" => v.add(Kind::Qna, 0.35),
                 "SearchResultsPage" => v.add(Kind::Search, 0.9),
-                "SocialMediaPosting" => v.add(Kind::Social, 0.9),
-                "DiscussionForumPosting" => v.add(Kind::Social, 0.6),
-                "ProfilePage" => v.add(Kind::Social, 0.4),
                 "WebApplication" | "SoftwareApplication" => v.add(Kind::WebApp, 0.3),
                 _ => {}
             }
@@ -1441,8 +1031,6 @@ fn vote_ext(v: &mut Votes, d: &super::ext::ExtData) {
             v.add(Kind::Video, 0.8);
         } else if t.starts_with("product") {
             v.add(Kind::Product, 0.8);
-        } else if t == "profile" {
-            v.add(Kind::Social, 0.4);
         }
     }
     if let Some(g) = d.meta.generator.as_deref().map(lc) {
@@ -1792,92 +1380,6 @@ mod tests {
     }
 
     #[test]
-    fn a_reddit_post_shows_votes_and_top_comments() {
-        let nodes = vec![
-            n(NodeKind::Heading(1), "Why do divers shower after every dive?", 100.0),
-            n(NodeKind::Text, "Posted by u/poolboy", 200.0),
-            n(NodeKind::Button, "12.4k upvotes", 300.0),
-            n(NodeKind::Button, "Share", 320.0),
-            n(NodeKind::Heading(2), "128 comments", 400.0),
-            n(NodeKind::Text, "u/alice", 450.0),
-            n(NodeKind::Text, "5h ago", 460.0),
-            n(NodeKind::Text, "The pool is cold and the air on deck is colder, so they rinse off to stay warm between dives.", 480.0),
-            n(NodeKind::Button, "Reply", 560.0),
-            n(NodeKind::Text, "u/bob", 600.0),
-            n(NodeKind::Text, "3h ago", 610.0),
-            n(NodeKind::Text, "Also the water is chlorinated and sitting in it would dry out their skin over a long session.", 630.0),
-            n(NodeKind::Button, "Reply", 710.0),
-            n(NodeKind::Text, "u/carol", 750.0),
-            n(NodeKind::Text, "1h ago", 760.0),
-            n(NodeKind::Text, "Former diver here: it is mostly about staying warm, the showers on deck are hot.", 780.0),
-            n(NodeKind::Button, "Reply", 860.0),
-        ];
-        let p = page(nodes);
-        let ev = Evidence { url: Some("https://www.reddit.com/r/explainlikeimfive/comments/abc123/why_do_divers_shower/"), title: "Why do divers shower after every dive? : r/explainlikeimfive", page: Some(&p), ext: None };
-        let k = read(&ev).expect("kind");
-        assert_eq!(k.id, "social");
-        assert!(k.fields.iter().any(|f| f.key == "Community" && f.value == "r/explainlikeimfive"), "{:?}", k.fields);
-        assert!(k.fields.iter().any(|f| f.key == "Author" && f.value == "u/poolboy"), "{:?}", k.fields);
-        assert!(k.fields.iter().any(|f| f.key == "Upvotes" && f.value == "12.4k upvotes"), "{:?}", k.fields);
-        assert!(k.fields.iter().any(|f| f.key == "Comments" && f.value == "128 comments"), "{:?}", k.fields);
-        let tops: Vec<&str> = k.fields.iter().filter(|f| f.key.starts_with("Top")).map(|f| f.value.as_str()).collect();
-        assert_eq!(tops.len(), 3, "{:?}", k.fields);
-        assert!(tops[0].starts_with("u/alice"), "{:?}", tops);
-        assert!(tops[1].starts_with("u/bob"), "{:?}", tops);
-        assert!(tops[2].starts_with("u/carol"), "{:?}", tops);
-    }
-
-    #[test]
-    fn an_x_post_shows_likes_and_replies() {
-        let nodes = vec![
-            n(NodeKind::Text, "@elonmusk", 100.0),
-            n(NodeKind::Text, "Starship launch tomorrow, weather permitting.", 120.0),
-            n(NodeKind::Text, "300 Reposts", 300.0),
-            n(NodeKind::Text, "1.2K Likes", 320.0),
-            n(NodeKind::Text, "45 Replies", 340.0),
-            n(NodeKind::Text, "@astrofan", 400.0),
-            n(NodeKind::Text, "2h ago", 410.0),
-            n(NodeKind::Text, "Watching from the beach with my kids, they have been talking about this all week.", 430.0),
-            n(NodeKind::Button, "Reply", 510.0),
-            n(NodeKind::Text, "@rocketlab", 550.0),
-            n(NodeKind::Text, "1h ago", 560.0),
-            n(NodeKind::Text, "Godspeed, hope the upper level winds cooperate for the catch attempt.", 580.0),
-            n(NodeKind::Button, "Reply", 660.0),
-        ];
-        let p = page(nodes);
-        let ev = Evidence { url: Some("https://x.com/elonmusk/status/123456789"), title: "Elon Musk on X: \"Starship launch tomorrow\" / X", page: Some(&p), ext: None };
-        let k = read(&ev).expect("kind");
-        assert_eq!(k.id, "social");
-        assert_eq!(k.main, "Starship launch tomorrow");
-        assert!(k.fields.iter().any(|f| f.key == "Author" && f.value == "@elonmusk"), "{:?}", k.fields);
-        assert!(k.fields.iter().any(|f| f.key == "Likes" && f.value == "1.2K Likes"), "{:?}", k.fields);
-        assert!(k.fields.iter().any(|f| f.key == "Shares" && f.value == "300 Reposts"), "{:?}", k.fields);
-        let tops: Vec<&str> = k.fields.iter().filter(|f| f.key.starts_with("Top")).map(|f| f.value.as_str()).collect();
-        assert_eq!(tops.len(), 2, "{:?}", k.fields);
-        assert!(tops[0].starts_with("@astrofan"), "{:?}", tops);
-    }
-
-    #[test]
-    fn a_post_with_its_comments_is_a_read_only_thread() {
-        let d = ext_data(r#"{"social":{"site":"reddit","author":"glasscannon","community":"r/pcmasterrace","up":4213,"comments":312,"list":[{"a":"ferrule_","t":"Looks good.","s":1800,"d":0,"op":false},{"a":"glasscannon","t":"Thanks.","s":640,"d":1,"op":true}]}}"#);
-        let ev = Evidence { url: Some("https://www.reddit.com/r/pcmasterrace/comments/abc/a_post/"), title: "A post : r/pcmasterrace", page: None, ext: Some(&d) };
-        let k = read(&ev).expect("a social post");
-        assert_eq!(k.id, "social");
-        assert_eq!(k.peek.as_deref(), Some("312"));
-        assert_eq!(k.sub, "r/pcmasterrace \u{b7} 4.2k \u{b7} 312 comments");
-        let t = k.thread.expect("a thread");
-        assert_eq!(t.who.as_deref(), Some("u/glasscannon"));
-        assert_eq!(t.stats.iter().map(|s| (s.icon, s.value.as_str())).collect::<Vec<_>>(), vec![("up", "4.2k"), ("chat", "312")]);
-        assert_eq!(t.comments.len(), 2);
-        assert_eq!(t.comments[0].who, "u/ferrule_");
-        assert_eq!(t.comments[0].score.as_deref(), Some("1.8k"));
-        assert_eq!((t.comments[1].depth, t.comments[1].op), (1, true));
-        assert_eq!(compact(412_000), "412k");
-        assert_eq!(compact(1_500_000), "1.5M");
-        assert_eq!(compact(999), "999");
-    }
-
-    #[test]
     fn private_and_blocked() {
         assert!(is_private_title("New InPrivate tab - Microsoft Edge"));
         assert!(is_private_title("New Tab - Google Chrome (Incognito)"));
@@ -1895,7 +1397,6 @@ mod tests {
             ld: serde_json::from_value(v.get("ld").cloned().unwrap_or_default()).unwrap_or_default(),
             video: v.get("video").and_then(|x| serde_json::from_value(x.clone()).ok()),
             words: v.get("words").and_then(|x| x.as_u64()).unwrap_or(0) as u32,
-            social: v.get("social").and_then(|x| serde_json::from_value(x.clone()).ok()),
             guide: None,
         }
     }

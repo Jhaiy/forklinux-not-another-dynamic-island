@@ -48,17 +48,10 @@
         <div id="brief-right" class="llm-right"></div>
       </div>
       <div id="hub" class="hidden">
-        <div id="hub-head">
-          <canvas id="hub-eyes"></canvas>
-          <div id="hub-clock" data-tip="Calendar"><span id="hub-time"></span><span id="hub-date"></span></div>
-          <div id="hub-rings">
-            <span class="ring-wrap" id="ring-cpu" data-color="#5AC8E6"></span>
-            <span class="ring-wrap" id="ring-ram" data-color="#B47EE6"></span>
-            <span class="ring-wrap hidden" id="ring-gpu" data-color="#8ADB6E"></span>
-          </div>
-        </div>
+        <!-- the head: rows of widgets that the plugins bring (see head.js) -->
+        <div id="hub-head"></div>
         <div id="hub-body">
-          <div id="pane-settings" class="hidden">
+          <div id="pane-settings" class="hub-pane hidden" data-pane="settings">
             <div id="set-tabs" role="tablist" aria-label="Settings"></div>
 
             <div class="set-tab hidden" data-tab="general" role="tabpanel">
@@ -206,6 +199,7 @@
               <div class="set-title set-title-split">
                 <span id="plugin-count">Plugins</span>
                 <span class="set-tools">
+                  <button type="button" class="set-ibtn" id="plugin-add" data-tip="Add plugins from GitHub" aria-label="Add plugins from GitHub"></button>
                   <button type="button" class="set-ibtn" id="plugin-folder" data-tip="Open the plugins folder" aria-label="Open the plugins folder"></button>
                   <button type="button" class="set-ibtn" id="plugin-rescan" data-tip="Look for new plugins" aria-label="Look for new plugins"></button>
                 </span>
@@ -214,12 +208,19 @@
             </div>
           </div>
 
-          <div id="pane-info">
+          <div id="pane-info" class="hub-pane" data-pane="info">
+            <div id="blank" class="hidden">
+              <div class="blank-ico" id="blank-ico"></div>
+              <h2>A blank slate</h2>
+              <p>NADI does nothing until you switch a plugin on. Plugins bring the eyes, the cards, the notifications, and whole pages like a calendar.</p>
+              <button type="button" class="set-btn go" id="blank-go">Browse plugins</button>
+            </div>
             <div id="now-cards" class="flat"></div>
             <div id="notif-history" class="flat"></div>
           </div>
 
-          <div id="pane-calendar" class="hidden">
+          <!-- the calendar's page: the Calendar plugin brings it, and a widget of its own in the head opens it (ui/plugins/calendar.js) -->
+          <div id="pane-calendar" class="hub-pane hidden" data-pane="calendar">
             <div id="cal-head">
               <button id="cal-prev" aria-label="Previous month"><svg viewBox="0 0 16 16"><path d="M10 3.5 5.5 8l4.5 4.5" /></svg></button>
               <button id="cal-title" data-tip="Jump to Today"></button>
@@ -232,6 +233,8 @@
             <div id="cal-events" class="flat"></div>
           </div>
         </div>
+        <!-- the foot: rows of widgets at the bottom of the island, under the cards (see head.js) -->
+        <div id="hub-foot"></div>
       </div>
     </div>
     <div id="float-layer"></div>

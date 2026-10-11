@@ -3,7 +3,7 @@
   "name": "Page Reader",
   "description": "A card in the expanded island for each page you have open, with what the page says (needs the NADI browser extension).",
   "version": "1.0.0",
-  "default_on": true,
+  "default_on": false,
   "permissions": {
     "sees": [
       { "name": "windows" },

@@ -50,9 +50,11 @@ pub struct FloatState {
     items: Mutex<Vec<FloatItem>>,
     loaded: AtomicBool,
     /// the layer's page has loaded and listens
-    ready: AtomicBool,
+    pub ready: AtomicBool,
     /// a drag-out that arrived before the layer had loaded
     pending: Mutex<Option<FloatBegin>>,
+    /// modals that were asked for before the layer had loaded (see `modal.rs`)
+    pub pending_modals: Mutex<Vec<serde_json::Value>>,
     /// where the cards are (physical px from the layer's corner) and their corner radius
     rects: Mutex<(Vec<[f64; 4]>, f64)>,
     watching: AtomicBool,
@@ -89,7 +91,7 @@ impl FloatState {
 }
 
 /// The desktop as one rectangle, over every monitor: (x, y, w, h) in physical px.
-fn desktop() -> (i32, i32, i32, i32) {
+pub fn desktop() -> (i32, i32, i32, i32) {
     use windows::Win32::UI::WindowsAndMessaging::{
         GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
         SM_YVIRTUALSCREEN,
@@ -110,7 +112,7 @@ fn hwnd_of(w: &WebviewWindow) -> isize {
 
 /// The layer's window, made when it is first needed. It covers the desktop, never takes focus and has no
 /// taskbar button; it stays hidden until it has a card to show.
-fn ensure(app: &AppHandle) -> Option<WebviewWindow> {
+pub fn ensure(app: &AppHandle) -> Option<WebviewWindow> {
     if let Some(w) = app.get_webview_window(LABEL) {
         return Some(w);
     }
@@ -276,7 +278,8 @@ pub async fn float_begin(
 pub fn float_ready(state: tauri::State<'_, Arc<IslandState>>) -> serde_json::Value {
     state.floats.ready.store(true, Ordering::Relaxed);
     let pending = state.floats.pending.lock().unwrap().take();
-    serde_json::json!({ "items": state.floats.list(), "begin": pending, "down": winutil::left_button_down() })
+    let modals: Vec<serde_json::Value> = std::mem::take(&mut *state.floats.pending_modals.lock().unwrap());
+    serde_json::json!({ "items": state.floats.list(), "begin": pending, "down": winutil::left_button_down(), "modals": modals })
 }
 
 /// What floats right now (the island leaves those cards out of its list).
@@ -333,6 +336,9 @@ pub fn float_region(app: AppHandle, state: tauri::State<'_, Arc<IslandState>>, r
     };
     let hwnd = hwnd_of(&w);
     let empty = rects.is_empty();
+    // The window is only what the cards (and their shadows) cover. A transparent window over the whole desktop is taken
+    // by Chrome for something that hides the page: its video stops and goes black.
+    winutil::clip_to(hwnd, &rects, radius * 4.0);
     *state.floats.rects.lock().unwrap() = (rects, radius);
     if empty {
         let _ = w.hide();

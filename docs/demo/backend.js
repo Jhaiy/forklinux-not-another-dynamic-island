@@ -175,6 +175,11 @@
     remove(id) {
       this.hist = this.hist.filter((e) => e.id !== id);
     }
+    clearHistory() {
+      this.hist = [];
+      this.queue = this.queue.filter((n) => n.brief);
+      if (this.current && !this.current.brief) this.dismissCurrent();
+    }
     hasCurrent() {
       return !!this.current;
     }
@@ -288,8 +293,8 @@
     if (st.pinned) st.shown = true;
     NADI.emit("pin-tick", st.pinned);
   };
-  C.set_hub_height = ({ h }) => {
-    st.hubHeight = Math.round(clamp(h, HUB_MIN_H, HUB_MAX_H));
+  C.set_hub_height = ({ h, edit }) => {
+    st.hubHeight = Math.round(clamp(h, HUB_MIN_H, edit ? 720 : HUB_MAX_H));
   };
   C.close_hub = () => {
     st.hubOpen = false;
@@ -302,10 +307,13 @@
     if (action === "viber" || action === "discord") NADI.focusApp?.("chat", true);
     NADI.notif.dismissCurrent();
   };
-  C.click_notification = ({ id, action }) => {
-    if (action) C.open_notification_action({ action });
-    NADI.notif.remove(id);
+  C.open_hub_at_notification = () => {
     NADI.notif.dismissCurrent();
+    st.hubOpen = true;
+    st.shown = true;
+  };
+  C.clear_notifications = () => {
+    NADI.notif.clearHistory();
     NADI.pushHistory();
   };
   C.dismiss_notification = ({ id }) => {

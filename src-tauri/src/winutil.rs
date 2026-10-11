@@ -59,6 +59,38 @@ pub fn place(hwnd: isize, x: i32, y: i32, w: i32, h: i32) {
     }
 }
 
+/// Cut a window down to the union of some rectangles (physical px from its corner), each grown by `pad` and rounded.
+/// Outside them the window does not exist: nothing is drawn there, nothing is hit, and a browser underneath does not take
+/// the window for something that covers it (a full-desktop layer made it pause the video). An empty list clears the cut.
+pub fn clip_to(hwnd: isize, rects: &[[f64; 4]], pad: f64) {
+    use windows::Win32::Graphics::Gdi::{CombineRgn, CreateRectRgn, CreateRoundRectRgn, DeleteObject, SetWindowRgn, RGN_OR};
+    unsafe {
+        let h = HWND(hwnd as *mut _);
+        if rects.is_empty() {
+            let _ = SetWindowRgn(h, None, true);
+            return;
+        }
+        let acc = CreateRectRgn(0, 0, 0, 0);
+        let round = (pad * 1.5) as i32;
+        for r in rects {
+            let one = CreateRoundRectRgn(
+                (r[0] - pad).floor() as i32,
+                (r[1] - pad).floor() as i32,
+                (r[2] + pad).ceil() as i32 + 1,
+                (r[3] + pad).ceil() as i32 + 1,
+                round,
+                round,
+            );
+            CombineRgn(acc, acc, one, RGN_OR);
+            let _ = DeleteObject(one);
+        }
+        // (the window owns the region once this works; if it does not, it is ours to free)
+        if SetWindowRgn(h, acc, true) == 0 {
+            let _ = DeleteObject(acc);
+        }
+    }
+}
+
 /// Put the window back on top of the topmost band, without moving, sizing or activating it.
 /// `SetWindowPos` with `SWP_NOZORDER` (see `place`) never changes the stacking, so a window
 /// that another topmost window (or the taskbar, a popup...) covered would stay covered.

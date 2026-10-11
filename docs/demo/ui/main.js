@@ -4,8 +4,10 @@
 // this is the whole idle-state UI, kept as cheap as the old QPainter path.
 
 import { initFloats } from "./floats.js";
+import { head } from "./head.js";
 import { initPluginUi, pluginCard, setRings, whenText } from "./pluginui.js";
 import { plugins } from "./plugins/index.js";
+import { addFromGitHub } from "./repo.js";
 import { eyes } from "./plugins/eyes.js";
 import { soundLight } from "./plugins/sound-light.js";
 import { updateAudio } from "./sound.js";
@@ -14,10 +16,9 @@ import {
 	LLM_COLOR,
 	LLM_LETTER,
 	LLM_RING_C,
+	askModal,
 	llmCtxColor,
 	llmStateIcon,
-	ringEls,
-	setRing,
 	ICON,
 	call,
 	el,
@@ -27,9 +28,7 @@ import {
 	li,
 	listen,
 	pills,
-	ringFrom,
 	view,
-	withIcon,
 } from "./kit.js";
 
 if (FLOATS) document.documentElement.classList.add("floats");
@@ -176,14 +175,11 @@ listen("view-tick", (event) => {
 		// left-click opens the info pane; the tray's Settings item asks for settings
 		setHubPane(pendingSettingsPane ? "settings" : "info");
 		pendingSettingsPane = false;
-		updateClock();
 		playHubEntrance(document.getElementById("hub-head"));
 		loadSettingsIntoForm();
 		loadNotificationHistory();
 		for (const p of plugins) p.hubOpened?.();
-		loadCalendar();
 		refreshActivity();
-		pollSysStats();
 	}
 });
 
@@ -308,42 +304,36 @@ listen("cursor-tick", (event) => {
 let pendingSettingsPane = false;
 const paneSettings = document.getElementById("pane-settings");
 const paneInfo = document.getElementById("pane-info");
-const paneCalendar = document.getElementById("pane-calendar");
 const hubBody = document.getElementById("hub-body");
+// the panes of the hub: the cards ("info"), the settings, and a page a plugin brings (a `.hub-pane` named by `data-pane`)
+const hubPanes = [...document.querySelectorAll(".hub-pane")];
+let currentPane = "info";
 
 function setHubPane(pane) {
-	paneSettings.classList.toggle(
-		"hidden",
-		pane !== "settings",
-	);
-	paneInfo.classList.toggle("hidden", pane !== "info");
-	paneCalendar.classList.toggle(
-		"hidden",
-		pane !== "calendar",
-	);
+	if (!hubPanes.some((p) => p.dataset.pane === pane)) pane = "info";
+	currentPane = pane;
+	let shown = paneInfo;
+	for (const p of hubPanes) {
+		const on = p.dataset.pane === pane;
+		p.classList.toggle("hidden", !on);
+		if (on) shown = p;
+	}
 	hubBody.scrollTop = 0;
 	scheduleHubHeight();
-	playHubEntrance(
-		pane === "settings"
-			? paneSettings
-			: pane === "calendar"
-				? paneCalendar
-				: paneInfo,
-	);
+	playHubEntrance(shown);
 }
 
 // -- adaptive hub height: the expanded island is only as tall as what it holds
 // (up to Rust's max). Watch the panes and the header; whenever the visible
 // pane's content height changes, tell Rust the height it should spring to. --
 const hubHeadEl = document.getElementById("hub-head");
+const hubFootEl = document.getElementById("hub-foot");
 let hubHeightSent = 0;
 let hubHeightRaf = 0;
 function reportHubHeight() {
 	hubHeightRaf = 0;
 	if (currentView !== "hub") return;
-	const pane = [paneSettings, paneInfo, paneCalendar].find(
-		(p) => !p.classList.contains("hidden"),
-	);
+	const pane = hubPanes.find((p) => !p.classList.contains("hidden"));
 	if (!pane) return;
 	// bottom edge of the last visible card. offsetTop/offsetHeight are layout
 	// values (getBoundingClientRect would include the entrance animation's
@@ -361,25 +351,21 @@ function reportHubHeight() {
 		}
 	};
 	visit(pane);
-	const pb = parseFloat(
-		getComputedStyle(hubBody).paddingBottom,
-	);
-	const h = Math.ceil(hubHeadEl.offsetHeight + bottom + pb);
+	// (edit mode has no cards: only the head, the tray and the foot are measured)
+	const pb = head.isEditing()
+		? 0
+		: parseFloat(getComputedStyle(hubBody).paddingBottom);
+	const h = Math.ceil(hubHeadEl.scrollHeight + bottom + pb + hubFootEl.offsetHeight);
 	if (Math.abs(h - hubHeightSent) < 2) return;
 	hubHeightSent = h;
-	invoke("set_hub_height", { h });
+	invoke("set_hub_height", { h, edit: head.isEditing() });
 }
 function scheduleHubHeight() {
 	if (!hubHeightRaf)
 		hubHeightRaf = requestAnimationFrame(reportHubHeight);
 }
 const hubHeightObserver = new ResizeObserver(scheduleHubHeight);
-for (const el of [
-	paneSettings,
-	paneInfo,
-	paneCalendar,
-	hubHeadEl,
-])
+for (const el of [...hubPanes, hubHeadEl, hubFootEl])
 	hubHeightObserver.observe(el);
 
 // stagger the pane's children springing up (CSS `rise` keyframes, --i = order)
@@ -402,32 +388,28 @@ function playHubEntrance(container) {
 	);
 }
 
-// header clock (DOM, not canvas -- crisper and styleable)
-const hubTimeEl = document.getElementById("hub-time");
-const hubDateEl = document.getElementById("hub-date");
-function updateClock() {
-	const now = new Date();
-	// military time (Settings > Time) shows it as 15:30
-	const t = now.toLocaleTimeString(
-		[],
-		currentSettings?.time_24h
-			? {
-					hour: "2-digit",
-					minute: "2-digit",
-					hourCycle: "h23",
-				}
-			: { hour: "numeric", minute: "2-digit" },
-	);
-	if (hubTimeEl.textContent !== t) hubTimeEl.textContent = t;
-	hubDateEl.textContent = now.toLocaleDateString([], {
-		weekday: "long",
-		month: "short",
-		day: "numeric",
-	});
+// the head of the hub, and its foot, are rows of widgets that the plugins bring (see head.js); the island only gives them
+// their rows, and what the hub's panes do: show one by name (a plugin's page is a pane too)
+host.setPane = (pane) => setHubPane(pane);
+host.pane = () => currentPane;
+if (!FLOATS) {
+	head.mount(document.getElementById("hub-head"), document.getElementById("hub-foot"));
+	head.init();
 }
-setInterval(() => {
-	if (currentView === "hub") updateClock();
-}, 1000);
+
+// nothing is on: the cards say what this is, and where to start
+const blankEl = document.getElementById("blank");
+document.getElementById("blank-ico").innerHTML = li("plug");
+function updateBlank() {
+	blankEl.classList.toggle("hidden", head.enabledCount() > 0);
+	scheduleHubHeight();
+}
+head.onEnabled(updateBlank);
+document.getElementById("blank-go").addEventListener("click", () => {
+	setHubPane("settings");
+	showSettingsTab("plugins");
+});
+document.getElementById("blank-go").addEventListener("mousedown", (e) => e.stopPropagation());
 
 // cursor spotlight: every .spot card gets the cursor position (relative to
 // itself) as --mx/--my, which its CSS radial-gradient follows like a flashlight
@@ -511,7 +493,7 @@ listen("pin-tick", (event) => {
 pill.addEventListener("mousedown", (e) => {
 	if (e.button !== 0) return;
 	// the open hub is a panel to work in: only its head (the eyes) takes the click that closes it
-	if (currentView === "hub" && !e.target.closest("#hub-head")) return;
+	if (currentView === "hub" && !e.target.closest("#hub-head, #hub-foot")) return;
 	eyes.mood.wideUntil = performance.now() + 320; // boop!
 	invoke("drag_start");
 });
@@ -530,7 +512,6 @@ const notifBody = document.getElementById("notif-body");
 const notifTimer = document.getElementById("notif-timer");
 document.getElementById("notif-icon").innerHTML = ICON.bell;
 
-let notifAction = null; // what clicking the current banner does (e.g. "viber")
 let notifId = 0; // its entry in the scrollback
 listen("notification-tick", (event) => {
 	const n = event.payload;
@@ -539,7 +520,6 @@ listen("notification-tick", (event) => {
 		showBrief(n);
 		return;
 	}
-	notifAction = n.action || null;
 	notifId = n.id;
 	notifTitle.textContent = n.title || "";
 	notifBody.textContent = n.body || "";
@@ -549,17 +529,36 @@ listen("notification-tick", (event) => {
 	notifTimer.classList.add("run");
 });
 
-// clicking a banner dismisses it (and its card in the hub), running its action if it has one,
-// instead of toggling the hub (its mousedown must not reach #pill's drag handler)
+// clicking a banner expands the island and scrolls the list to the notification (it stays in the list: it is
+// cleared by clicking its card, dragging it away, or "Clear all"); its mousedown must not reach #pill's drag handler
+let pendingNotifFocus = 0;
 notifEl.addEventListener("mousedown", (e) =>
 	e.stopPropagation(),
 );
-notifEl.addEventListener("click", () =>
-	invoke("click_notification", {
-		id: notifId,
-		action: notifAction,
-	}),
-);
+notifEl.addEventListener("click", () => {
+	pendingNotifFocus = notifId;
+	invoke("open_hub_at_notification");
+});
+
+// scroll to the notification a banner brought you for, and let it glow for a moment
+function focusPendingNotification() {
+	const id = pendingNotifFocus;
+	pendingNotifFocus = 0;
+	if (!id) return;
+	const item = notifHistoryEl.querySelector(`[data-id="${id}"]`);
+	if (!item) return;
+	const show = () => {
+		if (!item.isConnected) return;
+		item.scrollIntoView({ block: "center", behavior: "smooth" });
+	};
+	// (the hub is still growing to its height and the cards are still rising: scroll once it has settled)
+	setTimeout(show, 450);
+	setTimeout(show, 900);
+	item.classList.remove("flash");
+	void item.offsetWidth;
+	item.classList.add("flash");
+	setTimeout(() => item.classList.remove("flash"), 2400);
+}
 
 // -- a Claude Code session that needs you or finished: a compact pill from the same queue --
 const briefEl = document.getElementById("brief");
@@ -636,17 +635,109 @@ window.pushNotification = (title, body) =>
 // -- notification history: the hub's scrollback of past banners --
 const notifHistoryEl = document.getElementById("notif-history");
 
+// a card dragged sideways follows the pointer; let go past a third of its width (or with a flick) and it is
+// dismissed, else it springs back. The click that ends a drag is not a click.
+function makeSwipeable(item, dismissItem) {
+	let down = null;
+	let moved = false;
+	item.style.touchAction = "pan-y";
+	item.addEventListener("pointerdown", (e) => {
+		if (e.button !== 0 || e.target.closest(".notif-x")) return;
+		down = { id: e.pointerId, x: e.clientX, t: performance.now(), lastX: e.clientX, lastT: performance.now(), v: 0 };
+		moved = false;
+	});
+	item.addEventListener("pointermove", (e) => {
+		if (!down || e.pointerId !== down.id) return;
+		const dx = e.clientX - down.x;
+		if (!moved) {
+			if (Math.abs(dx) < 6) return;
+			moved = true;
+			item.setPointerCapture(e.pointerId);
+			item.classList.add("swiping");
+			item.style.transition = "none";
+		}
+		const now = performance.now();
+		if (now > down.lastT) down.v = (e.clientX - down.lastX) / (now - down.lastT);
+		down.lastX = e.clientX;
+		down.lastT = now;
+		const w = item.offsetWidth || 1;
+		item.style.transform = `translateX(${dx}px)`;
+		item.style.opacity = String(Math.max(0.15, 1 - Math.abs(dx) / w));
+	});
+	const end = (e) => {
+		if (!down || e.pointerId !== down.id) return;
+		const d = down;
+		down = null;
+		if (!moved) return;
+		const dx = e.clientX - d.x;
+		const w = item.offsetWidth || 1;
+		item.classList.remove("swiping");
+		const gone = Math.abs(dx) > w / 3 || (Math.abs(d.v) > 0.6 && Math.abs(dx) > 30);
+		if (gone && e.type === "pointerup") {
+			const to = (dx < 0 ? -1 : 1) * (w + 40);
+			item.style.transition = "transform 0.2s cubic-bezier(0.4, 0, 0.9, 0.6), opacity 0.2s ease";
+			item.style.transform = `translateX(${to}px)`;
+			item.style.opacity = "0";
+			setTimeout(dismissItem, 190);
+		} else {
+			item.style.transition = "transform 0.4s var(--spring), opacity 0.25s ease";
+			item.style.transform = "";
+			item.style.opacity = "";
+			setTimeout(() => (item.style.transition = ""), 420);
+		}
+	};
+	item.addEventListener("pointerup", end);
+	item.addEventListener("pointercancel", end);
+	// (the click a drag ends with: swallowed, before anything else hears it)
+	item.addEventListener(
+		"click",
+		(e) => {
+			if (moved) {
+				moved = false;
+				e.stopImmediatePropagation();
+			}
+		},
+		true,
+	);
+}
+
 function renderNotificationHistory(entries) {
 	notifHistoryEl.innerHTML = "";
 	if (!entries || entries.length === 0) {
 		updateInfoEmpty();
 		return;
 	}
+	// the head of the list: what it is, and (while the island is hovered) a button that clears it all
+	const bar = document.createElement("div");
+	bar.className = "notif-bar";
+	const label = document.createElement("span");
+	label.textContent = "Notifications";
+	const clear = document.createElement("button");
+	clear.type = "button";
+	clear.className = "notif-clear";
+	clear.textContent = "Clear all";
+	clear.addEventListener("mousedown", (e) => e.stopPropagation());
+	clear.addEventListener("click", () => {
+		// (they slide off one after another, then Rust forgets them)
+		const items = [...notifHistoryEl.querySelectorAll(".notif-history-item")];
+		items.forEach((it, i) => {
+			it.style.transition = `transform 0.25s cubic-bezier(0.5, 0, 0.9, 0.6) ${Math.min(i, 8) * 35}ms, opacity 0.25s ease ${Math.min(i, 8) * 35}ms`;
+			it.style.transform = "translateX(48px)";
+			it.style.opacity = "0";
+			it.style.pointerEvents = "none";
+		});
+		clear.disabled = true;
+		setTimeout(() => invoke("clear_notifications"), 250 + Math.min(items.length, 9) * 35);
+	});
+	bar.append(label, clear);
+	notifHistoryEl.appendChild(bar);
 	for (const entry of entries) {
 		const item = document.createElement("div");
 		item.className = "notif-history-item spot";
+		item.dataset.id = String(entry.id);
 		// dismiss: the card slides off and folds away, then Rust forgets it
 		const dismissItem = () => {
+			item.style.transition = "";
 			item.style.height = `${item.offsetHeight}px`;
 			void item.offsetWidth; // commit the explicit height so it can transition to 0
 			item.classList.add("leaving");
@@ -658,8 +749,8 @@ function renderNotificationHistory(entries) {
 				280,
 			);
 		};
-		// clicking a card clears it (the x does the same without going anywhere); one with an
-		// action also jumps to its source app
+		// clicking a card clears it (the x does the same without going anywhere, and so does dragging it away);
+		// one with an action also jumps to its source app
 		item.classList.add("clickable");
 		item.addEventListener("mousedown", (e) =>
 			e.stopPropagation(),
@@ -671,6 +762,7 @@ function renderNotificationHistory(entries) {
 				});
 			dismissItem();
 		});
+		makeSwipeable(item, dismissItem);
 
 		const dismiss = document.createElement("button");
 		dismiss.className = "notif-x";
@@ -719,6 +811,7 @@ async function loadNotificationHistory() {
 	renderNotificationHistory(
 		await invoke("get_notification_history"),
 	);
+	focusPendingNotification();
 }
 
 listen("notification-history-tick", (event) => {
@@ -738,6 +831,7 @@ const hubEl = document.getElementById("hub");
 (function decorate() {
 	for (const b of document.querySelectorAll(".hub-btn-x"))
 		b.innerHTML = li("x");
+	document.getElementById("plugin-add").innerHTML = li("plus");
 	document.getElementById("plugin-folder").innerHTML = li("folder");
 	document.getElementById("plugin-rescan").innerHTML = li("refresh");
 })();
@@ -1072,6 +1166,27 @@ function showSettingsTab(id) {
 		if (SET_TABS.some((t) => t.id === saved)) first = saved;
 	} catch (_) {}
 	showSettingsTab(first);
+	// the pencil arranges the head and the foot (it closes the settings, as the cards are what is arranged around); the cross
+	// closes them (the settings page has no button to it in the head: the tray opens it)
+	const edit = document.createElement("button");
+	edit.type = "button";
+	edit.id = "head-edit";
+	edit.className = "set-edit";
+	edit.setAttribute("aria-label", "Arrange the widgets");
+	edit.dataset.tip = "Arrange the widgets";
+	edit.innerHTML = li("pen");
+	edit.addEventListener("mousedown", (e) => e.stopPropagation());
+	edit.addEventListener("click", () => head.startEdit());
+	bar.append(edit);
+	const close = document.createElement("button");
+	close.type = "button";
+	close.className = "set-close";
+	close.setAttribute("aria-label", "Close the settings");
+	close.dataset.tip = "Back to the cards";
+	close.innerHTML = li("x");
+	close.addEventListener("mousedown", (e) => e.stopPropagation());
+	close.addEventListener("click", () => setHubPane("info"));
+	bar.append(close);
 }
 setPinShrink.addEventListener("input", () => {
 	setPinShrinkLabel.textContent = pinShrinkText(
@@ -1127,332 +1242,6 @@ function updateSizePreview() {
 	pill.style.width = `${Number(setCompactWidth.value) * k}px`;
 }
 paneSettings.addEventListener("input", updateSizePreview);
-
-// -- the calendar (a main feature): the events come from whichever plugin brought them, pushed by Rust --
-function applyCalendar(c) {
-	calSetData(c);
-}
-
-// -- hub calendar view: click the clock to swap the cards for a month grid.
-// Pick a day to list that day's events from the .ics feed. Collapsing the
-// island drops back to the cards (the hub always reopens on the info pane). --
-const calTitleEl = document.getElementById("cal-title");
-const calWeekEl = document.getElementById("cal-week");
-const calGridEl = document.getElementById("cal-grid");
-const calDayTitleEl = document.getElementById("cal-day-title");
-const calStatusEl = document.getElementById("cal-status");
-const calEventsEl = document.getElementById("cal-events");
-const cal = {
-	data: null,
-	byDay: new Map(),
-	month: null,
-	sel: null,
-};
-
-const dayKey = (d) =>
-	d.getFullYear() * 10000 +
-	(d.getMonth() + 1) * 100 +
-	d.getDate();
-const startOfDay = (d) =>
-	new Date(d.getFullYear(), d.getMonth(), d.getDate());
-const addDays = (d, n) =>
-	new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
-
-// first weekday of the user's locale: 0 = Sunday .. 6 = Saturday
-function calFirstDow() {
-	try {
-		const loc = new Intl.Locale(navigator.language);
-		const info = loc.getWeekInfo
-			? loc.getWeekInfo()
-			: loc.weekInfo;
-		if (info && info.firstDay) return info.firstDay % 7;
-	} catch (_) {}
-	return 0;
-}
-const CAL_FIRST_DOW = calFirstDow();
-
-function calIndex() {
-	cal.byDay = new Map();
-	if (!cal.data || !cal.data.events) return;
-	for (const ev of cal.data.events) {
-		const first = startOfDay(new Date(ev.start_ms));
-		// end is exclusive: a 00:00-00:00 all-day event covers exactly one day
-		const lastMs =
-			ev.end_ms > ev.start_ms
-				? ev.end_ms - 1
-				: ev.start_ms;
-		const last = startOfDay(new Date(lastMs));
-		let d = first;
-		for (
-			let n = 0;
-			d <= last && n < 62;
-			n++, d = addDays(d, 1)
-		) {
-			const k = dayKey(d);
-			if (!cal.byDay.has(k)) cal.byDay.set(k, []);
-			cal.byDay.get(k).push(ev);
-		}
-	}
-}
-
-function calSetData(c) {
-	cal.data = c;
-	calIndex();
-	if (!paneCalendar.classList.contains("hidden")) {
-		buildCalGrid(null);
-		renderCalDay(false);
-	}
-}
-
-function buildCalWeekHeader() {
-	calWeekEl.textContent = "";
-	const base = new Date(2023, 0, 1); // a Sunday
-	for (let i = 0; i < 7; i++) {
-		const s = document.createElement("span");
-		s.textContent = addDays(
-			base,
-			(CAL_FIRST_DOW + i) % 7,
-		).toLocaleDateString([], { weekday: "narrow" });
-		calWeekEl.append(s);
-	}
-}
-buildCalWeekHeader();
-
-function buildCalGrid(dir) {
-	const first = new Date(
-		cal.month.getFullYear(),
-		cal.month.getMonth(),
-		1,
-	);
-	calTitleEl.textContent = first.toLocaleDateString([], {
-		month: "long",
-		year: "numeric",
-	});
-	const offset = (first.getDay() - CAL_FIRST_DOW + 7) % 7;
-	const gridStart = addDays(first, -offset);
-	const todayKey = dayKey(new Date());
-	const selKey = dayKey(cal.sel);
-	calGridEl.textContent = "";
-	for (let i = 0; i < 42; i++) {
-		const d = addDays(gridStart, i);
-		const k = dayKey(d);
-		const btn = document.createElement("button");
-		btn.className = "cal-day";
-		if (d.getMonth() !== first.getMonth())
-			btn.classList.add("other");
-		if (k === todayKey) btn.classList.add("today");
-		if (k === selKey) btn.classList.add("sel");
-		btn.dataset.key = k;
-		const num = document.createElement("span");
-		num.textContent = d.getDate();
-		const dots = document.createElement("span");
-		dots.className = "cal-dots";
-		const n = Math.min((cal.byDay.get(k) || []).length, 3);
-		for (let j = 0; j < n; j++)
-			dots.append(document.createElement("i"));
-		btn.append(num, dots);
-		btn.addEventListener("click", () => selectCalDay(d));
-		calGridEl.append(btn);
-	}
-	if (dir) {
-		calGridEl.classList.remove("slide-next", "slide-prev");
-		void calGridEl.offsetWidth; // restart the slide
-		calGridEl.classList.add(
-			dir > 0 ? "slide-next" : "slide-prev",
-		);
-	}
-}
-
-function calTimeLabel(ev, day) {
-	if (ev.all_day) return "All day";
-	const fmt = (ms) =>
-		new Date(ms).toLocaleTimeString([], {
-			hour: "numeric",
-			minute: "2-digit",
-		});
-	const dayStart = day.getTime();
-	const dayEnd = addDays(day, 1).getTime();
-	const startsToday = ev.start_ms >= dayStart;
-	const endsToday = ev.end_ms <= dayEnd;
-	if (ev.end_ms <= ev.start_ms) return fmt(ev.start_ms);
-	if (startsToday && endsToday)
-		return `${fmt(ev.start_ms)} – ${fmt(ev.end_ms)}`;
-	if (startsToday) return `${fmt(ev.start_ms)} →`;
-	return endsToday ? `→ ${fmt(ev.end_ms)}` : "All day";
-}
-
-function renderCalDay(animate) {
-	const day = startOfDay(cal.sel);
-	const list = (cal.byDay.get(dayKey(day)) || [])
-		.slice()
-		.sort((a, b) => {
-			return (
-				(b.all_day ? 1 : 0) - (a.all_day ? 1 : 0) ||
-				a.start_ms - b.start_ms
-			);
-		});
-	const label = day.toLocaleDateString([], {
-		weekday: "long",
-		month: "short",
-		day: "numeric",
-	});
-	// a day with nothing on it shows nothing: no date heading, no placeholder
-	calDayTitleEl.textContent = list.length
-		? `${label} · ${list.length} ${list.length === 1 ? "event" : "events"}`
-		: "";
-
-	calStatusEl.textContent = "";
-	calEventsEl.textContent = "";
-	const d = cal.data;
-	if (!d || !d.configured) {
-		// nobody brings events: say where they come from
-		calStatusEl.textContent = "No calendar plugin is on. Switch one on in Settings > Plugins.";
-		return;
-	}
-	if (d.error) {
-		calStatusEl.textContent = d.error;
-		return;
-	}
-	if (!list.length) return;
-	const now = Date.now();
-	list.forEach((ev, i) => {
-		const row = document.createElement("div");
-		row.className = "cal-event spot";
-		if (
-			ev.end_ms < now &&
-			!(ev.all_day && ev.end_ms >= now)
-		)
-			row.classList.add("past");
-		if (animate) {
-			row.classList.add("fresh");
-			row.style.setProperty("--i", i);
-		}
-		const title = document.createElement("div");
-		title.className = "cal-event-title";
-		title.textContent = ev.summary;
-		const time = document.createElement("div");
-		time.className = "cal-event-time";
-		withIcon(time, "clock", calTimeLabel(ev, day));
-		row.append(title, time);
-		calEventsEl.append(row);
-	});
-}
-
-function selectCalDay(d) {
-	const prevMonth =
-		cal.month.getFullYear() * 12 + cal.month.getMonth();
-	cal.sel = startOfDay(d);
-	const newMonth = d.getFullYear() * 12 + d.getMonth();
-	if (newMonth !== prevMonth) {
-		cal.month = new Date(d.getFullYear(), d.getMonth(), 1);
-		buildCalGrid(newMonth > prevMonth ? 1 : -1);
-	} else {
-		// same month: just move the highlight (the disc springs between cells)
-		const k = String(dayKey(cal.sel));
-		for (const el of calGridEl.children)
-			el.classList.toggle("sel", el.dataset.key === k);
-	}
-	renderCalDay(true);
-}
-
-function shiftCalMonth(delta) {
-	const prev = cal.month;
-	cal.month = new Date(
-		prev.getFullYear(),
-		prev.getMonth() + delta,
-		1,
-	);
-	// keep the same day-of-month selected where it exists (clamped to month end)
-	const lastDay = new Date(
-		cal.month.getFullYear(),
-		cal.month.getMonth() + 1,
-		0,
-	).getDate();
-	cal.sel = new Date(
-		cal.month.getFullYear(),
-		cal.month.getMonth(),
-		Math.min(cal.sel.getDate(), lastDay),
-	);
-	buildCalGrid(delta);
-	renderCalDay(true);
-}
-
-function openCalendar() {
-	const today = startOfDay(new Date());
-	cal.sel = today;
-	cal.month = new Date(
-		today.getFullYear(),
-		today.getMonth(),
-		1,
-	);
-	buildCalGrid(null);
-	renderCalDay(false);
-	setHubPane("calendar");
-}
-
-document
-	.getElementById("hub-clock")
-	.addEventListener("click", () => {
-		eyes.mood.happyUntil = performance.now() + 700;
-		if (paneCalendar.classList.contains("hidden"))
-			openCalendar();
-		else setHubPane("info");
-	});
-document
-	.getElementById("cal-prev")
-	.addEventListener("click", () => shiftCalMonth(-1));
-document
-	.getElementById("cal-next")
-	.addEventListener("click", () => shiftCalMonth(1));
-calTitleEl.addEventListener("click", () => {
-	const today = startOfDay(new Date());
-	if (
-		dayKey(today) === dayKey(cal.sel) &&
-		cal.month.getMonth() === today.getMonth()
-	)
-		return;
-	const dir =
-		today.getFullYear() * 12 + today.getMonth() >
-		cal.month.getFullYear() * 12 + cal.month.getMonth()
-			? 1
-			: -1;
-	cal.sel = today;
-	cal.month = new Date(
-		today.getFullYear(),
-		today.getMonth(),
-		1,
-	);
-	buildCalGrid(dir);
-	renderCalDay(true);
-});
-let calWheelAt = 0;
-paneCalendar.addEventListener(
-	"wheel",
-	(e) => {
-		if (
-			!e.target.closest("#cal-grid, #cal-head") ||
-			performance.now() - calWheelAt < 260
-		)
-			return;
-		calWheelAt = performance.now();
-		e.preventDefault();
-		shiftCalMonth(e.deltaY > 0 ? 1 : -1);
-	},
-	{ passive: false },
-);
-// clicks in here must not reach #pill's mousedown (it would start a window
-// drag / read the click as "toggle the hub")
-paneCalendar.addEventListener("mousedown", (e) =>
-	e.stopPropagation(),
-);
-document
-	.getElementById("hub-clock")
-	.addEventListener("mousedown", (e) => e.stopPropagation());
-
-async function loadCalendar() {
-	applyCalendar(await invoke("get_calendar"));
-}
-listen("calendar-tick", (e) => applyCalendar(e.payload));
 
 // -- custom backgrounds: an image or video behind the collapsed island, and
 // optionally a different one behind the expanded hub. Files live in the app's
@@ -1615,38 +1404,6 @@ for (const row of document.querySelectorAll(".hub-row")) {
 	);
 }
 
-// -- hub stat rings: CPU/RAM/GPU (polled each second while the hub is open); the plugins add their own. Percent
-// lives in the tooltip only. --
-for (const el of document.querySelectorAll(".ring-wrap")) ringFrom(el);
-
-async function pollSysStats() {
-	if (currentView !== "hub") return;
-	const s = await invoke("get_sys_stats");
-	setRing(
-		"cpu",
-		s.cpu_pct,
-		`CPU · ${Math.round(s.cpu_pct)}%`,
-	);
-	setRing(
-		"ram",
-		s.ram_pct,
-		`RAM · ${Math.round(s.ram_pct)}%\n${s.ram_used_gb.toFixed(1)} / ${s.ram_total_gb.toFixed(1)} GB`,
-	);
-}
-if (!FLOATS) setInterval(pollSysStats, 1000);
-
-// GPU: Windows perf counters (Rust-side); null until the counter has a
-// baseline or if the machine has no GPU counters -- ring stays hidden then
-async function pollGpu() {
-	if (currentView !== "hub") return;
-	const pct = await invoke("get_gpu_pct");
-	const ring = ringEls.gpu;
-	if (pct == null) return;
-	ring.el.classList.remove("hidden");
-	setRing("gpu", pct, `GPU · ${Math.round(pct)}%`);
-}
-if (!FLOATS) setInterval(pollGpu, 1000);
-
 // -- hub "Now" section: one media card per live session (live, from media-tick) + game / work /
 // coding cards (polled from Rust while the hub is showing the info pane) --
 const nowCardsEl = document.getElementById("now-cards");
@@ -1657,30 +1414,39 @@ function updateInfoEmpty() {}
 
 // ---- the plugins screen: every plugin in one list (the native ones, and the folders with a manifest)
 
-// what a plugin asks to see, and a way to say no: shown before it is switched on
-function confirmPlugin(p, item) {
+// what a plugin asks to see, and a way to say no: shown before it is switched on, in a modal
+async function confirmPlugin(p, item) {
+	const answer = await askModal({
+		id: `switch-on:${p.id}`,
+		remember: "switch-on",
+		width: 400,
+		title: `Switch on ${p.name}?`,
+		icon: { letter: (p.name || "?").trim().charAt(0).toUpperCase(), color: tintOf(p.id) },
+		blocks: [
+			p.permissions.length ? { facts: p.permissions.map((x) => ({ title: permName(x), text: x.why })) } : { text: "No permissions.", kind: "muted" },
+		],
+		buttons: [
+			{ id: "no", label: "Cancel" },
+			{ id: "yes", label: "Switch on", primary: true },
+		],
+	});
+	// (no window to show it on: the same question, under the plugin's row)
+	return answer ? answer.button === "yes" : confirmInline(p, item);
+}
+
+function confirmInline(p, item) {
 	return new Promise((resolve) => {
 		// inline, under the plugin's row: the island's window is only as tall as the hub, so an overlay would be cropped
 		const box = el("div", "pg-dialog spot");
 		box.append(el("h4", null, `Switch on ${p.name}?`));
-		box.append(
-			el(
-				"p",
-				"pg-dialog-note",
-				p.kind === "native"
-					? "This is part of the app. To do its job it looks at this:"
-					: p.kind === "wasm"
-						? `${p.bundled ? "It ships with the app." : "It is a module: code that runs here."} It runs in a sandbox, with no network, and can only see this:`
-						: `${p.bundled ? "This ships with the app. " : ""}It can only ask the hosts listed, and draws only what it is given here:`,
-			),
-		);
+		box.append(el("p", "pg-dialog-note", "Can access:"));
 		const list = el("div", "pg-dialog-perms");
 		for (const x of p.permissions) {
 			const r = el("div", "pg-dialog-perm");
 			r.append(el("b", null, permName(x)), el("span", null, x.why));
 			list.append(r);
 		}
-		if (!p.permissions.length) list.append(el("div", "pg-dialog-perm", "Nothing but a card of its own."));
+		if (!p.permissions.length) list.append(el("div", "pg-dialog-perm", "No permissions."));
 		box.append(list);
 		const buttons = el("div", "pg-dialog-buttons");
 		const no = el("button", "set-btn", "Cancel");
@@ -1747,6 +1513,7 @@ function pluginItem(p, reload) {
 			cb.checked = true;
 		}
 		await invoke("plugin_set", { id: p.id, on: cb.checked });
+		head.refreshEnabled();
 		refreshActivity();
 		reload();
 	});
@@ -1958,10 +1725,31 @@ async function renderPlugins() {
 	document.getElementById("plugin-dnd").checked = !!listing.dnd;
 	document.getElementById("plugin-count").textContent = `Plugins · ${listing.plugins.length}`;
 	// one list: the ones that ship with the app come first (the host orders them), then the folders
-	document.getElementById("plugin-list").replaceChildren(...listing.plugins.map((p) => pluginItem(p, renderPlugins)));
+	// (the host lists the ones that ship with the app first, then the folders; the ones from a repository gather under its name)
+	const list = [];
+	const groups = new Map();
+	for (const p of listing.plugins) {
+		if (p.from) {
+			const key = p.from.split(" ")[0];
+			if (!groups.has(key)) groups.set(key, []);
+			groups.get(key).push(p);
+		} else list.push(pluginItem(p, renderPlugins));
+	}
+	for (const [repo, members] of groups) {
+		const ref = members[0].from.slice(repo.length).trim();
+		const head = el("div", "pg-group");
+		head.append(el("b", null, repo), el("span", null, `${ref ? `${ref} · ` : ""}${members.length} ${members.length === 1 ? "plugin" : "plugins"}`));
+		const up = el("button", "set-btn pg-update", "Check for updates");
+		up.type = "button";
+		up.addEventListener("click", () => addFromGitHub({ prefill: repo, tint: tintOf, onChange: renderPlugins }));
+		head.append(up);
+		list.push(head, ...members.map((p) => pluginItem(p, renderPlugins)));
+	}
+	document.getElementById("plugin-list").replaceChildren(...list);
 	scheduleHubHeight();
 }
 document.getElementById("plugin-dnd").addEventListener("change", (e) => invoke("plugin_dnd", { on: e.target.checked }));
+document.getElementById("plugin-add").addEventListener("click", () => addFromGitHub({ tint: tintOf, onChange: renderPlugins }));
 document.getElementById("plugin-folder").addEventListener("click", () => invoke("plugin_folder"));
 document.getElementById("plugin-rescan").addEventListener("click", async () => {
 	try {
@@ -2028,6 +1816,17 @@ let tipTarget = null;
 let tipTimer = 0;
 
 function renderTip(target) {
+	// (a tooltip that is not words: an element, or a function that makes one each time)
+	const rich = target._tipRich;
+	tipEl.classList.toggle("rich", rich != null);
+	if (rich != null) {
+		let node = null;
+		try {
+			node = typeof rich === "function" ? rich() : rich.cloneNode(true);
+		} catch (_) {}
+		tipEl.replaceChildren(...(node ? [node] : []));
+		return;
+	}
 	const [head, ...rest] = (target.dataset.tip || "").split(
 		"\n",
 	);
@@ -2128,6 +1927,16 @@ new MutationObserver((muts) => {
 // what only this page can do, for the plugins' files (see kit.js)
 host.scheduleHubHeight = scheduleHubHeight;
 host.refreshTip = refreshTip;
+host.setTip = (target, content) => {
+	if (typeof content === "string") {
+		target._tipRich = null;
+		target.dataset.tip = content;
+	} else {
+		target._tipRich = content;
+		target.dataset.tip = "rich";
+	}
+	if (target === tipTarget) refreshTip(target);
+};
 host.invalidate = () => (lastActivitySignature = "");
 host.refresh = () => refreshActivity();
 host.enter = playEnter;
