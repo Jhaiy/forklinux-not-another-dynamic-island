@@ -591,7 +591,8 @@
     }
     const category = confirmed || "idle";
     const has = !NON_SESSION.includes(category);
-    st.hasWork = has;
+    // (browsing has no pill: the page cards in the expanded island show it)
+    st.hasWork = has && category !== "browsing";
     // browsing a page the island understands: the pill names the page, not the activity
     const k = category === "browsing" ? W.pageKind() : null;
     NADI.emit("work-tick", {

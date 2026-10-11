@@ -516,7 +516,8 @@ fn run(ctx: Ctx, shared: Arc<Shared>) {
 
             let category = confirmed.clone().unwrap_or_else(|| "idle".to_string());
             let has_session = !NON_SESSION.contains(&category.as_str());
-            ctx.offer_pill(has_session.then_some("work"));
+            // (browsing has no pill: the page reader's cards, in the expanded island, are what shows it)
+            ctx.offer_pill((has_session && category != "browsing").then_some("work"));
             shared.set_session(has_session.then(|| (category.clone(), confirmed_since)));
             ctx.emit(
                 "work-tick",

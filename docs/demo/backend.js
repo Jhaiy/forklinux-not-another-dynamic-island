@@ -18,7 +18,6 @@
   const GLOW_PAD = 44;
   const REVEAL_SECS = 0.6;
   const EDGE_POLL_MS = 16;
-  const COMPACT_BASE = 260;
   const SIZES = {
     idle: [140, 28],
     media: [260, 40],
@@ -38,11 +37,9 @@
   const SPRING_SETTLE_VEL = 2;
 
   function viewSize(view, width, hubW) {
-    const [w, h] = SIZES[view];
-    const k = width / COMPACT_BASE;
-    if (view === "hub") return [hubW, h];
-    if (view === "notification" || view === "brief") return [width, h];
-    return [w * k, h];
+    const [, h] = SIZES[view];
+    // every view but the hub is as wide as the collapsed width
+    return view === "hub" ? [hubW, h] : [width, h];
   }
 
   const lerp = (c, t, e) => c + (t - c) * e;
@@ -348,7 +345,7 @@
 
     const pad = GLOW_PAD;
     let appliedWidth = compactPx();
-    let winW = (SIZES.idle[0] * appliedWidth) / COMPACT_BASE;
+    let winW = appliedWidth;
     let winH = SIZES.idle[1];
     st.centerX = geo.width / 2;
     let posX = st.centerX - winW / 2;

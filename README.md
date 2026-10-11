@@ -25,8 +25,8 @@ It is Windows-only for now. The goal is to stay light: it should never make the 
 - **Page reader.** The island knows what kind of page you are on (walkthrough, wiki article, news
   article, video, recipe, Q&A thread, API reference, product page, search results, web app such as a pull
   request) and says what matters for that kind: how many steps a guide has, the sections of an article, the
-  answers on a question, a post with its comments. The work pill names the page. Where you are on the page is
-  not followed. It
+  answers on a question, a post with its comments, as a card in the expanded island (the collapsed island
+  shows nothing of it). Where you are on the page is not followed. It
   needs the browser extension ([nadi-chrome](https://github.com/Llyme/nadi-chrome), Chrome, Edge, Brave, Opera,
   Vivaldi): the page describes itself (its metadata, headings, comments), exactly, and costs the
   browser next to nothing. Without the extension a browser is
