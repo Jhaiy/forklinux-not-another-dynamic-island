@@ -7143,7 +7143,10 @@ html.settings #plugin-list > .set-card + .pg-group {
   text-align: left;
   cursor: pointer;
   user-select: none;
-  transition: transform 0.35s var(--spring), opacity 0.25s ease;
+  /* (the line of a selected tile is drawn in from inside it, and goes back in when it is not selected any more) */
+  outline: 2px solid transparent;
+  outline-offset: -8px;
+  transition: transform 0.4s var(--spring), opacity 0.25s ease, filter 0.25s ease, outline-color 0.2s ease, outline-offset 0.4s var(--spring);
 }
 
 .tl:not(.tl-static):active {
@@ -7233,6 +7236,21 @@ html.settings #plugin-list > .set-card + .pg-group {
 
 .tl-pic .tl-live {
   background: #fff;
+}
+
+/* a wide tile is a row: the picture is its icon at the left, not a picture blown up over it (a small one would be pixels); the words are after it */
+.tl-wide .tl-art.pic {
+  background-size: auto 78%;
+  background-position: 7px center;
+  animation: none;
+}
+
+.tl-wide .tl-art.pic + .tl-scrim {
+  display: none;
+}
+
+.tl-wide.tl-pic .tl-face.tl-row {
+  padding-left: 58px;
 }
 
 .tl-large .tl-art.cover + .tl-scrim {
@@ -7609,7 +7627,8 @@ html.settings #plugin-list > .set-card + .pg-group {
 }
 
 .tl-alert {
-  outline: 2px solid var(--c);
+  outline-color: var(--c);
+  outline-offset: 0;
   animation: tl-alert 1.6s ease-in-out infinite;
 }
 
@@ -7761,11 +7780,13 @@ html.settings #plugin-list > .set-card + .pg-group {
 /* selected: the picture sharpens, a ring in its own colour, a notch to the page; the others step back */
 .tl-sel {
   z-index: 2;
-  transform: scale(1.02);
-  outline: 2px solid var(--ring);
+  transform: scale(1.04);
+  outline-color: var(--ring);
+  outline-offset: 0;
 }
 
-.tl-sel::after {
+/* the notch to its page: it grows out of the tile */
+.tl::after {
   content: "";
   position: absolute;
   left: 50%;
@@ -7775,6 +7796,26 @@ html.settings #plugin-list > .set-card + .pg-group {
   margin-left: -8px;
   background: var(--ring);
   clip-path: polygon(0 0, 100% 0, 50% 100%);
+  transform: scaleY(0);
+  transform-origin: 50% 0;
+  transition: transform 0.3s var(--spring);
+}
+
+.tl-sel::after {
+  transform: scaleY(1);
+}
+
+/* what takes the place of the other: it comes up under the tile */
+#now-cards.swap,
+#tile-area:not(.paged) #notif-history {
+  animation: tl-rise 0.38s var(--spring) backwards;
+}
+
+@keyframes tl-rise {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
 }
 
 #tiles.has-sel .tl:not(.tl-sel) {

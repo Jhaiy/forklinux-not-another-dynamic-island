@@ -21,6 +21,7 @@ let layout = { positions: {}, sizes: {}, removed: [], center: false, gap: null }
 let cards = []; // the cards of the moment (elements), as main.js builds them
 let openId = null;
 let lastPageSig = "";
+let shownId = null; // the tile whose page is in the page now
 const nodes = new Map(); // tile id -> its element
 const faceSig = new Map(); // tile id -> what its face was drawn from
 
@@ -330,8 +331,10 @@ ${(d ? (big ? `${big} ${d.glance.caption || ""}` : d.title || d.sub) : spec.idle
 
 let cols = 4;
 
-function measure() {
-	const w = grid.clientWidth;
+let hubW = 0; // the width the open island is going to have (the setting): the grid is laid out for that from the first moment
+
+function measure(width = 0) {
+	const w = width || grid.clientWidth;
 	if (!w) return;
 	// (as many columns as fit squares of about 90 px: a wider island has more of them, a narrower one fewer; the squares grow to fill)
 	cols = Math.max(2, Math.floor((w + gap) / (WANT + gap)));
@@ -447,6 +450,13 @@ function renderArea() {
 	if (openId && !spec) openId = null;
 	area.classList.toggle("paged", !!openId);
 	pageEl.classList.toggle("hidden", !openId);
+	// (another tile's page, or the page again: it comes up, as it does when the notifications come back)
+	if (openId && openId !== shownId) {
+		pageEl.classList.remove("swap");
+		void pageEl.offsetWidth;
+		pageEl.classList.add("swap");
+	}
+	shownId = openId;
 	// (the page has the colour of its tile)
 	area.style.setProperty("--pg", (openId && nodes.get(openId)?.style.getPropertyValue("--ring")) || "#8e8e96");
 	if (!openId) {
@@ -476,7 +486,11 @@ async function load() {
 		specs = v.tiles || [];
 		layout = { positions: v.layout?.positions || {}, sizes: v.layout?.sizes || {}, removed: v.layout?.removed || [], center: !!v.layout?.center, gap: v.layout?.gap ?? null };
 		gap = layout.gap ?? GAP;
-		measure();
+		if (!hubW) {
+			const st = await invoke("get_settings");
+			hubW = (Number(st?.hub_width) || 420) - 40;
+		}
+		measure(hubW);
 	} catch (_) {}
 	render();
 }
@@ -490,7 +504,17 @@ export function update(list) {
 export const hasTiles = () => visibleSpecs().length > 0;
 
 export function initTiles() {
-	new ResizeObserver(measure).observe(grid);
+	// (the island grows to its width over a moment, and the grid with it: laid out at every width on the way, the tiles would clump up
+	// and then spread; they are laid out once the width has stopped changing, and keep the layout they had until then)
+	let settle = 0;
+	new ResizeObserver(() => {
+		clearTimeout(settle);
+		settle = setTimeout(() => {
+			if (grid.clientWidth) hubW = grid.clientWidth;
+			measure();
+			render();
+		}, 140);
+	}).observe(grid);
 	measure();
 	listen("tiles-changed", load);
 	listen("plugins-changed", load);

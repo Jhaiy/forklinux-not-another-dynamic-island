@@ -471,10 +471,19 @@ const SPRING_SETTLE_VEL: f64 = 2.0;
 /// velocity, carried by the caller across ticks (in the same units as
 /// `value` per second). Returns the new value; `vel` is updated in place.
 fn spring_step(value: f64, target: f64, vel: &mut f64, dt: f64) -> f64 {
-    let accel = -SPRING_STIFFNESS * (value - target) - SPRING_DAMPING * *vel;
+    spring_step_damped(value, target, vel, dt, SPRING_DAMPING)
+}
+
+/// The same spring with its own damping. At `SPRING_CRITICAL` it goes to the target and stops there, with no overshoot: the height of an
+/// open island whose content changes (a tile is pressed) moves like that, so it does not bounce.
+fn spring_step_damped(value: f64, target: f64, vel: &mut f64, dt: f64, damping: f64) -> f64 {
+    let accel = -SPRING_STIFFNESS * (value - target) - damping * *vel;
     *vel += accel * dt;
     value + *vel * dt
 }
+
+/// 2 * sqrt(`SPRING_STIFFNESS`)
+const SPRING_CRITICAL: f64 = 72.12;
 
 /// Ease for the hide slide: a small anticipation dip first (the pill sinks a
 /// few pixels), then it accelerates up and out -- reads as a deliberate
@@ -564,6 +573,7 @@ fn spawn_edge_poll(window: WebviewWindow) {
         let mut vel_dash_x = 0.0; // monitor-to-monitor dash
         let mut vel_w = 0.0; // view-switch resize (width)
         let mut vel_h = 0.0; // view-switch resize (height)
+        let mut smooth_h = false; // the height of an open island is changing because its content did: no bounce
         // Some((target_w, target_h, anchor_mid_x)) while a view-switch
         // resize is springing toward its new size -- the pill grows/shrinks
         // from its current center (`anchor_mid_x`, captured once when the
@@ -685,6 +695,7 @@ fn spawn_edge_poll(window: WebviewWindow) {
                     lh = state.hub_height.load(Ordering::Relaxed) as f64;
                     applied_hub_h = lh;
                 }
+                smooth_h = false;
                 let anchor_mid_x = pos_x + win_w / 2.0;
                 size_anim = Some((lw * scale, lh * scale, anchor_mid_x));
                 vel_w = 0.0;
@@ -715,6 +726,7 @@ fn spawn_edge_poll(window: WebviewWindow) {
                 if (want_h - applied_hub_h).abs() >= 1.0 || (hub_w - applied_hub_w).abs() >= 1.0 {
                     applied_hub_h = want_h;
                     applied_hub_w = hub_w;
+                    smooth_h = true;
                     let anchor = size_anim.map_or(pos_x + win_w / 2.0, |a| a.2);
                     size_anim = Some((hub_w * scale, want_h * scale, anchor));
                 }
@@ -726,7 +738,7 @@ fn spawn_edge_poll(window: WebviewWindow) {
             // cartoonish overshoot-and-settle "expanding" motion
             if let Some((target_w, target_h, anchor_mid_x)) = size_anim {
                 win_w = spring_step(win_w, target_w, &mut vel_w, dt);
-                win_h = spring_step(win_h, target_h, &mut vel_h, dt);
+                win_h = spring_step_damped(win_h, target_h, &mut vel_h, dt, if smooth_h { SPRING_CRITICAL } else { SPRING_DAMPING });
                 let settled = spring_settled(win_w, target_w, vel_w)
                     && spring_settled(win_h, target_h, vel_h);
                 if settled {

@@ -22,6 +22,10 @@ let placed = new Map();
 let drag = null;
 
 const sizeOf = (s) => (layout.sizes[s.id] && s.sizes.includes(layout.sizes[s.id]) ? layout.sizes[s.id] : s.start || s.sizes[0]);
+const isWide = (id) => {
+	const s = specs.find((x) => x.id === id);
+	return !!s && sizeOf(s) === "wide";
+};
 const label = (z) => `${z[0].toUpperCase()}${z.slice(1)}`;
 const shown = () => specs.filter((s) => !layout.removed.includes(s.id));
 
@@ -41,7 +45,8 @@ function keep(first, at) {
 		if (one) one.pos = at;
 	}
 	const next = solve(list, cols, first);
-	layout.positions = Object.fromEntries([...next].map(([id, p]) => [id, { col: p.col, row: p.row }]));
+	// (a wide tile keeps the cell it was put in, not the stretch of it)
+	layout.positions = Object.fromEntries([...next].map(([id, p]) => [id, { col: p.ac ?? p.col, row: p.row }]));
 	save();
 	draw();
 }
@@ -189,7 +194,7 @@ function draw() {
 	panel.append(opts);
 	// (the island moves a row, not the places: the grid here shows where each tile is kept)
 	panel.append(el("div", "te-hint", "Center Tiles puts the tiles of a row in the middle of the island when there is room at its sides. The grid here shows where each tile is kept."));
-	panel.append(el("div", "te-hint", "Drag a tile to any place of the grid. A tile offers only the sizes it can be drawn in, and starts at the first its plugin lists. A tile that is off is removed from the island, and its plugin keeps running. Every other tile stays, whether or not anything is going on."));
+	panel.append(el("div", "te-hint", "Drag a tile to any place of the grid. A wide tile takes the free places of its row around it, and shares them evenly with another wide tile in the row. A tile offers only the sizes it can be drawn in, and starts at the first its plugin lists. A tile that is off is removed from the island, and its plugin keeps running. Every other tile stays, whether or not anything is going on."));
 	const wrap = el("div", "te-cols");
 	wrap.append(hub, panel);
 	root.replaceChildren(wrap);
@@ -201,7 +206,7 @@ function draw() {
 function cellAt(x, y, d) {
 	const r = grid.getBoundingClientRect();
 	const cw = (r.width + gap) / cols;
-	const span = placed.get(d.id) || { w: 1, h: 1 };
+	const span = isWide(d.id) ? { w: 1, h: 1 } : placed.get(d.id) || { w: 1, h: 1 };
 	let col = Math.round((x - d.dx - r.left) / cw) + 1;
 	let row = Math.round((y - d.dy - r.top) / cw) + 1;
 	col = Math.min(Math.max(1, col), cols - span.w + 1);
@@ -241,7 +246,7 @@ function move(e) {
 	d.ghost.style.top = `${e.clientY - d.dy}px`;
 	const at = cellAt(e.clientX, e.clientY, d);
 	d.at = at;
-	const span = placed.get(d.id) || { w: 1, h: 1 };
+	const span = isWide(d.id) ? { w: 1, h: 1 } : placed.get(d.id) || { w: 1, h: 1 };
 	d.target.style.gridColumn = `${at.col} / span ${span.w}`;
 	d.target.style.gridRow = `${at.row} / span ${span.h}`;
 }

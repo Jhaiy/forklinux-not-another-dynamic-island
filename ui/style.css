@@ -975,6 +975,11 @@ body.shrunk #pill-glow {
   pointer-events: auto;
 }
 
+/* (the clock is only to be read here: it is not pressed, hovered or moved) */
+.rest-z .hw-clock {
+  pointer-events: none;
+}
+
 .rest-z .face-widget {
   width: 56px !important;
   height: 100% !important;
