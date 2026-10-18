@@ -36,7 +36,7 @@
   inset: 0;
   display: flex;
   flex-direction: column;
-  border-radius: 28px;
+  border-radius: var(--r-hub);
   overflow: hidden;
   color: var(--fg);
   font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif;
@@ -822,28 +822,6 @@
   outline-offset: 2px;
 }
 
-/* edit mode: the cards below are out of the way */
-/* (edit mode has no cards: the head, with its tray, takes the room, and scrolls if the island cannot be as tall; the foot stays) */
-#hub.hh-editing #hub-body {
-  display: none;
-}
-
-#hub.hh-editing #hub-head {
-  flex: 0 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
-
-#hub.hh-editing #hub-head::-webkit-scrollbar {
-  width: 4px;
-}
-
-#hub.hh-editing #hub-head::-webkit-scrollbar-thumb {
-  border-radius: 2px;
-  background: rgba(255, 255, 255, 0.25);
-}
-
 /* ---- the island with nothing on ---- */
 #blank {
   display: flex;
@@ -1020,7 +998,7 @@
 
 .spot {
   position: relative;
-  border-radius: 16px;
+  border-radius: var(--r-card);
   background:
     radial-gradient(170px circle at var(--mx, -400px) var(--my, -400px), rgba(var(--accent-rgb), calc(0.14 * var(--spot-a))), transparent 70%),
     var(--card);
@@ -1487,8 +1465,6 @@
   transform: scale(0.9);
 }
 
-
-
 /* ---- tooltip: one floating glass bubble that springs in (see initTooltips) ---- */
 #tip {
   position: fixed;
@@ -1582,6 +1558,15 @@
   font-size: 10px;
   font-weight: 400;
   color: var(--fg-dim);
+}
+
+/* (what a permission is of: a path, a command; it wraps rather than makes the tooltip wider) */
+.tip-detail {
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--fg-dim);
+  overflow-wrap: anywhere;
 }
 
 .tip-foot {
@@ -2421,117 +2406,6 @@ body.call-hide-pill #pill {
   }
 }
 
-/* ---- download cards ---- */
-.dl-card {
-  padding-block: 10px;
-}
-
-.dl-list {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.dl-item {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas: "name meta" "bar bar";
-  gap: 4px 10px;
-  padding: 6px 8px;
-  border-radius: 10px;
-  font-size: 11.5px;
-}
-
-.dl-item.done,
-.dl-item.focus {
-  cursor: pointer;
-}
-
-.dl-item.done:hover,
-.dl-item.focus:hover {
-  background: rgba(255, 255, 255, 0.06);
-}
-
-.dl-name {
-  grid-area: name;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--fg);
-}
-
-.dl-meta {
-  grid-area: meta;
-  color: var(--fg-dim);
-  font-size: 10.5px;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.dl-item.done .dl-meta {
-  color: var(--accent);
-}
-
-.dl-bar {
-  grid-area: bar;
-  height: 3px;
-  border-radius: 2px;
-  background: rgba(255, 255, 255, 0.08);
-  overflow: hidden;
-}
-
-.dl-fill {
-  display: block;
-  height: 100%;
-  width: 0;
-  border-radius: 2px;
-  background: var(--accent);
-  transition: width 0.6s ease-out;
-}
-
-.dl-fill.busy {
-  width: 35%;
-  animation: dl-busy 1.4s ease-in-out infinite alternate;
-}
-
-@keyframes dl-busy {
-  from {
-    transform: translateX(0);
-  }
-  to {
-    transform: translateX(185%);
-  }
-}
-
-.dl-src {
-  margin-right: 7px;
-  font-size: 9.5px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--fg-mute);
-}
-
-.dl-item.nobar .dl-bar {
-  display: none;
-}
-
-.dl-app {
-  width: 14px;
-  height: 14px;
-  margin-right: 8px;
-  vertical-align: -3px;
-  border-radius: 3px;
-  object-fit: contain;
-}
-
-.dl-meta.dl-done-icon {
-  display: inline-flex;
-  align-items: center;
-  color: var(--accent);
-}
-
 /* ---- line icons (see LI_PATHS in main.js) ---- */
 svg.li {
   flex: none;
@@ -2782,14 +2656,12 @@ svg.li {
 
 .now-card.collapsible:not(.open) .now-sub,
 .now-card.collapsible:not(.open) .work-body,
-.now-card.collapsible:not(.open) .dl-list,
 .now-card.collapsible:not(.open) .now-seek,
 .now-card.collapsible:not(.open) .media-extra {
   display: none;
 }
 
 .now-card.collapsible.open .work-body,
-.now-card.collapsible.open .dl-list,
 .now-card.collapsible.open .media-extra,
 .now-card.collapsible.open .now-seek {
   animation: rise 0.5s var(--spring) backwards;
@@ -2870,257 +2742,13 @@ svg.li {
   display: none;
 }
 
-/* downloads header: progress ring, speed trace, speed */
-.dl-ring {
-  position: relative;
-  flex: none;
-  width: 32px;
-  height: 32px;
-  display: grid;
-  place-items: center;
-  color: var(--accent);
-}
-
-.dl-ring > .li {
-  width: 14px;
-  height: 14px;
-}
-
-.dl-ring svg.r {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  transform: rotate(-90deg);
-}
-
-.dl-ring .rb,
-.dl-ring .rf {
-  fill: none;
-  stroke-width: 2.5;
-}
-
-.dl-ring .rb {
-  stroke: rgba(255, 255, 255, 0.09);
-}
-
-.dl-ring .rf {
-  stroke: var(--accent);
-  stroke-linecap: round;
-  stroke-dasharray: 94.25;
-  transition: stroke-dashoffset 0.6s ease-out;
-}
-
-.dl-ring.busy svg.r {
-  animation: dl-spin 1.6s linear infinite;
-}
-
 @keyframes dl-spin {
   to {
     transform: rotate(270deg);
   }
 }
 
-.dl-badge {
-  position: absolute;
-  right: -5px;
-  top: -5px;
-  min-width: 15px;
-  height: 15px;
-  padding: 0 4px;
-  border-radius: 8px;
-  background: var(--accent);
-  color: #0b0b0d;
-  font-size: 9.5px;
-  font-weight: 700;
-  display: grid;
-  place-items: center;
-  box-sizing: border-box;
-}
-
-.dl-spark {
-  flex: 1;
-  min-width: 0;
-  height: 26px;
-}
-
-.dl-spark svg {
-  display: block;
-  width: 100%;
-  height: 100%;
-  overflow: visible;
-}
-
-.dl-spark .a {
-  fill: rgba(var(--accent-rgb), 0.14);
-}
-
-.dl-spark .l {
-  fill: none;
-  stroke: var(--accent);
-  stroke-width: 1.6;
-  stroke-linejoin: round;
-  vector-effect: non-scaling-stroke;
-}
-
-.dl-card .dl-total {
-  font-size: 11px;
-  letter-spacing: 0;
-  color: var(--fg-dim);
-  font-variant-numeric: tabular-nums;
-}
-
-.dl-card .dl-total.dl-done-icon {
-  display: flex;
-  color: var(--accent);
-}
-
-.dl-card .dl-list {
-  margin-top: 10px;
-}
-
-/* game card: rings in the header (collapsed), meters in the body (opened) */
-.g-rings {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 9px;
-}
-
-.now-card.open .g-rings {
-  display: none;
-}
-
-.g-meters {
-  gap: 7px;
-}
-
-.g-meter {
-  display: grid;
-  grid-template-columns: 38px minmax(0, 1fr) 56px;
-  align-items: center;
-  gap: 8px;
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--fg-mute);
-}
-
-.g-meter[hidden] {
-  display: none;
-}
-
-.g-meter i {
-  position: relative;
-  display: block;
-  height: 4px;
-  border-radius: 2px;
-  background: rgba(255, 255, 255, 0.08);
-  overflow: hidden;
-}
-
-.g-meter i::after {
-  content: "";
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: var(--v, 0%);
-  border-radius: 2px;
-  background: var(--c, var(--accent));
-  transition: width 0.5s ease-out;
-}
-
-.g-meter em {
-  font-style: normal;
-  text-align: right;
-  font-size: 11px;
-  letter-spacing: 0;
-  text-transform: none;
-  color: var(--fg-dim);
-  font-variant-numeric: tabular-nums;
-}
-
 /* frames per second, before the rings */
-.g-fps {
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.g-fps[hidden] {
-  display: none;
-}
-
-.g-fps b {
-  font-weight: 650;
-  color: var(--fg);
-}
-
-.g-fps small {
-  margin-left: 2px;
-  font-size: 9.5px;
-  font-weight: 500;
-  letter-spacing: 0.06em;
-  color: var(--fg-mute);
-}
-
-.g-vitals {
-  gap: 10px;
-}
-
-.g-vitals[hidden] {
-  display: none;
-}
-
-.g-stats {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.g-stat b {
-  display: block;
-  font-size: 15px;
-  font-weight: 650;
-  color: var(--fg);
-  font-variant-numeric: tabular-nums;
-}
-
-.g-stat span {
-  font-size: 9.5px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--fg-mute);
-}
-
-.g-graph {
-  height: 54px;
-}
-
-.g-graph svg {
-  display: block;
-  width: 100%;
-  height: 100%;
-  overflow: visible;
-}
-
-.g-graph .a {
-  fill: rgba(var(--accent-rgb), 0.13);
-}
-
-.g-graph .l {
-  fill: none;
-  stroke: var(--accent);
-  stroke-width: 1.5;
-  stroke-linejoin: round;
-  vector-effect: non-scaling-stroke;
-}
-
-.g-graph .g {
-  stroke: rgba(255, 255, 255, 0.07);
-  stroke-width: 1;
-  stroke-dasharray: 3 4;
-  vector-effect: non-scaling-stroke;
-}
 
 /* ---- LLM sessions ---- */
 .llm-card.llm-waiting {
@@ -3615,7 +3243,6 @@ svg.li {
   display: none;
 }
 
-
 .media-jump.hidden {
   display: none;
 }
@@ -3722,6 +3349,37 @@ svg.li {
   background: var(--accent, #fff);
   opacity: 0.9;
   transition: height 0.07s linear;
+}
+
+.pg-graph {
+  height: 54px;
+}
+
+.pg-graph svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.pg-graph .a {
+  fill: rgba(var(--accent-rgb), 0.13);
+}
+
+.pg-graph .l {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.pg-graph .g {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.07);
+  stroke-width: 1;
+  stroke-dasharray: 3 4;
+  vector-effect: non-scaling-stroke;
 }
 
 .pg-list {
@@ -5803,12 +5461,43 @@ label.set-row {
   color: var(--fg-mute);
 }
 
-.pg-update {
-  margin-left: auto;
+.pg-ibtn {
+  display: grid;
+  place-items: center;
   align-self: center;
+  width: 26px;
   height: 26px;
-  padding: 0 11px;
-  font-size: 11px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg-mute);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.pg-ibtn:first-of-type {
+  margin-left: auto;
+}
+
+.pg-ibtn .li {
+  width: 15px;
+  height: 15px;
+  stroke-width: 1.7;
+}
+
+.pg-ibtn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--fg);
+}
+
+.pg-ibtn.go {
+  color: var(--accent);
+}
+
+.pg-ibtn:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .pl {
@@ -6172,6 +5861,14 @@ label.set-row {
   color: var(--fg);
 }
 
+.sf-meter em {
+  grid-column: 2 / -1;
+  margin-top: -3px;
+  font-style: normal;
+  font-size: 10px;
+  color: var(--fg-mute);
+}
+
 /* ---- a picture in the tile of a plugin's card or pill (a cover), and a bar that can be pressed ---- */
 .pg-art {
   width: 100%;
@@ -6201,4 +5898,2209 @@ label.set-row {
   height: 6px;
   padding: 4px 0;
   background-clip: content-box;
+}
+
+/* a pill that shows how far something is: a row for each, label, bar and number (a limit that moved) */
+.pg-rows {
+  display: none;
+}
+
+.pg-pill.pg-has-rows {
+  flex-direction: column;
+  justify-content: center;
+  gap: 0;
+  padding: 0 20px;
+}
+
+.pg-pill.pg-has-rows .pg-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  width: 100%;
+}
+
+.pg-pill.pg-has-rows .pg-tile,
+.pg-pill.pg-has-rows .text-col,
+.pg-pill.pg-has-rows .pg-meters,
+.pg-pill.pg-has-rows .pg-right,
+.pg-pill.pg-has-rows .pg-pbuttons,
+.pg-pill.pg-has-rows .pg-pbar {
+  display: none;
+}
+
+/* ---- the settings window (this page with ?settings=1, see settingswin.rs): it shows only the settings ---- */
+#settings-win {
+  display: none;
+}
+
+html.settings,
+html.settings body {
+  background: #202024;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+html.settings #pill,
+html.settings #call-glow,
+html.settings #pill-glow,
+html.settings #face-outside,
+html.settings #float-layer {
+  display: none !important;
+}
+
+html.settings #settings-win {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: #202024;
+  color: #f2f2f5;
+  font: 13px "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+}
+
+#set-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 44px;
+  padding: 0 10px 0 14px;
+  background: #18181b;
+}
+
+.set-bar-tile {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  background: #f2f2f5;
+  color: #18181b;
+  pointer-events: none;
+}
+
+.set-bar-tile .li {
+  width: 14px;
+  height: 14px;
+}
+
+.set-bar-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.set-bar-btns {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+}
+
+.set-bar-btns button {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #8e8e96;
+  cursor: pointer;
+}
+
+.set-bar-btns button:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #f2f2f5;
+}
+
+#set-close:hover {
+  background: #e5675c !important;
+  color: #fff !important;
+}
+
+.set-bar-btns .li {
+  width: 13px;
+  height: 13px;
+}
+
+#set-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+#set-side {
+  flex: none;
+  width: 196px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  padding: 12px;
+  background: #1a1a1e;
+}
+
+.set-find {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 10px;
+  margin-bottom: 8px;
+  border-radius: 10px;
+  background: #111114;
+  color: #6d6d75;
+  cursor: text;
+}
+
+.set-find:focus-within {
+  box-shadow: 0 0 0 1.5px #f2f2f5;
+}
+
+.set-find .li {
+  width: 14px;
+  height: 14px;
+}
+
+#set-find {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #f2f2f5;
+  font: inherit;
+  font-size: 12.5px;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+#set-nav {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+#set-nav button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 36px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: #b4b4bc;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+#set-nav button.last {
+  margin-top: auto;
+}
+
+#set-nav button:hover {
+  color: #f2f2f5;
+}
+
+#set-nav button.on {
+  background: rgba(255, 255, 255, 0.1);
+  color: #f2f2f5;
+}
+
+#set-nav button .li {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
+html.settings #pane-settings {
+  flex: 1;
+  min-width: 0;
+  height: auto;
+  display: block;
+  box-sizing: border-box;
+  padding: 22px 30px 26px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #3a3a40 transparent;
+}
+
+html.settings .set-tab {
+  flex: none;
+  min-height: 0;
+  overflow: visible;
+  padding: 0;
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
+html.settings .set-tab[data-tab="size"]:not(.hidden) {
+  display: block;
+}
+
+html.settings #pane-settings.searching .set-tab {
+  display: none;
+}
+
+.set-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 4px;
+}
+
+.set-head h1 {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.2px;
+}
+
+.set-count {
+  margin-left: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  color: #6d6d75;
+}
+
+.set-sub {
+  margin-top: 2px;
+  font-size: 13px;
+  color: #8e8e96;
+}
+
+html.settings .set-title {
+  margin: 22px 2px 8px;
+}
+
+html.settings .set-tab > .set-title:first-child {
+  margin-top: 22px;
+}
+
+html.settings .set-card {
+  padding: 0 16px;
+  border-radius: 14px;
+}
+
+html.settings .set-row {
+  grid-template-columns: minmax(0, 1fr) 250px;
+  min-height: 50px;
+  font-size: 13.5px;
+  color: #f2f2f5;
+}
+
+html.settings .set-row-auto,
+html.settings .set-row:has(.set-bg),
+html.settings .set-row:has(.swatches) {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+html.settings .set-lab small {
+  display: block;
+  margin-top: 2px;
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: #6d6d75;
+}
+
+html.settings .set-sl {
+  grid-template-columns: 20px minmax(0, 1fr) 56px;
+}
+
+html.settings .set-row.flash {
+  animation: set-flash 1.4s ease-out;
+}
+
+@keyframes set-flash {
+  0%,
+  40% {
+    background: rgba(var(--accent-rgb), 0.22);
+  }
+  100% {
+    background: transparent;
+  }
+}
+
+html.settings .set-prev {
+  min-height: 150px;
+  margin-top: 4px;
+}
+
+#set-results {
+  display: block;
+}
+
+#set-results.hidden {
+  display: none;
+}
+
+.set-res {
+  display: block;
+  width: 100%;
+  margin-bottom: 5px;
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.045);
+  color: #f2f2f5;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.set-res:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.set-res-t {
+  display: block;
+  font-size: 13.5px;
+}
+
+.set-res-s {
+  display: block;
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: #6d6d75;
+}
+
+.set-res mark,
+.set-res-t mark {
+  padding: 0 1px;
+  border-radius: 3px;
+  background: rgba(var(--accent-rgb), 0.28);
+  color: inherit;
+}
+
+.set-nores {
+  padding: 24px 4px;
+  color: #8e8e96;
+}
+
+html.settings #set-results .set-title:first-child {
+  margin-top: 6px;
+}
+
+/* the plugins page: the list, and the page of the plugin that is selected */
+.set-head .set-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+
+.set-head .set-tools .set-btn.go {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 14px;
+  background: #e9e9ee;
+  color: #18181b;
+}
+
+.set-head .set-tools .set-btn .li {
+  width: 13px;
+  height: 13px;
+}
+
+.set-head .set-ibtn {
+  width: 30px;
+  height: 30px;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.plg-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 22px;
+  margin-top: 18px;
+  align-items: start;
+}
+
+#plugin-detail {
+  position: sticky;
+  top: 0;
+}
+
+.pl-card {
+  padding: 0 !important;
+  overflow: hidden;
+}
+
+.pl-card .pl .prow {
+  padding: 0 12px;
+}
+
+.pl.sel {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.pl-card .pmain {
+  grid-template-columns: 32px minmax(0, 1fr);
+}
+
+html.settings .pg-group {
+  margin: 0 2px 8px;
+}
+
+html.settings #plugin-list > .set-card + .pg-group {
+  margin-top: 22px;
+}
+
+.pg-more.det {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.det-top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.det-top .tile {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  font-size: 16px;
+}
+
+.det-who h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.det-meta {
+  display: block;
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: #6d6d75;
+}
+
+.pg-more.det .pg-about {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: #9a9aa4;
+}
+
+@media (max-width: 760px) {
+  #set-side {
+    width: 150px;
+  }
+  html.settings #pane-settings {
+    padding: 18px 20px 22px;
+  }
+  .plg-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  #plugin-detail {
+    position: static;
+  }
+  html.settings .set-row {
+    grid-template-columns: minmax(0, 1fr) 190px;
+  }
+}
+
+/* ---- two blocks a module may draw in a widget: a picture (or an icon) with words, and a round icon button ---- */
+.sf-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.sf-tile {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.1);
+  color: #d9d9df;
+}
+
+.sf-tile img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.sf-tile .li {
+  width: 12px;
+  height: 12px;
+}
+
+.sf-words {
+  display: grid;
+  min-width: 0;
+  line-height: 1.15;
+}
+
+.sf-words b {
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sf-words small {
+  overflow: hidden;
+  font-size: 9.5px;
+  color: var(--fg-mute);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sf-ibtn {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.14);
+  color: #f2f2f5;
+  cursor: pointer;
+}
+
+.sf-ibtn:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+.sf-ibtn .li {
+  width: 11px;
+  height: 11px;
+}
+
+/* (at rest there is room for one line) */
+.rest-z .sf-words small {
+  display: none;
+}
+
+/* ---- the island page of the settings: the pickers of the resting island's sections ---- */
+.set-card.hidden,
+.set-title.hidden {
+  display: none;
+}
+
+/* ---- the pages of the two layout editors are a column, not as wide as the window ---- */
+#pane-settings .set-tab {
+  max-width: 960px;
+}
+
+/* ---- the resting island's editor (see restedit.js): a list of islands, and the editor of the one that is chosen ---- */
+.re {
+  margin-top: 16px;
+  user-select: none;
+}
+
+.re-md {
+  display: grid;
+  grid-template-columns: 232px minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.re-grp {
+  display: flex;
+  justify-content: space-between;
+  margin: 0 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: #8e8e96;
+}
+
+.re-grp em {
+  font-style: normal;
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: #6d6d75;
+}
+
+.re-list .re-card + .re-grp {
+  margin-top: 18px;
+}
+
+.re-card {
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.045);
+  overflow: hidden;
+}
+
+.re-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 56px;
+  box-sizing: border-box;
+  padding: 0 12px 0 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  cursor: pointer;
+  transition: background 0.15s ease, opacity 0.15s ease;
+}
+
+.re-row:first-child {
+  border-top: 0;
+}
+
+.re-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.re-row.sel {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.re-row:focus-visible {
+  outline: 2px solid var(--fg);
+  outline-offset: -2px;
+}
+
+.re-row.re-lifted {
+  opacity: 0.4;
+}
+
+.re-row.re-before::before,
+.re-row.re-after::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+}
+
+.re-row.re-before::before {
+  top: -1px;
+}
+
+.re-row.re-after::after {
+  bottom: -1px;
+}
+
+.re-grip {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 28px;
+  color: #4a4a52;
+  cursor: grab;
+  touch-action: none;
+}
+
+.re-grip:hover {
+  color: #9a9aa4;
+}
+
+.re-grip .li {
+  width: 14px;
+  height: 14px;
+  stroke-width: 2.4;
+}
+
+.re-tx {
+  flex: 1;
+  min-width: 0;
+}
+
+.re-tx b {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.re-tx span {
+  display: block;
+  margin-top: 1px;
+  overflow: hidden;
+  font-size: 11px;
+  color: #6d6d75;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.re-row.offr .re-tx b {
+  color: #9a9aa4;
+}
+
+.re-tag {
+  flex: none;
+  padding: 2px 7px;
+  border-radius: 99px;
+  background: rgba(255, 255, 255, 0.07);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: #8e8e96;
+}
+
+.re-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.re-words b {
+  display: block;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.re-words span {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: #8e8e96;
+}
+
+.re-switch {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: #b4b4bc;
+}
+
+.re-stage {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 20px 14px 10px;
+  border-radius: 16px;
+  background: radial-gradient(120% 140% at 20% 0%, #27304a 0%, #171a26 60%, #11131b 100%);
+}
+
+.re-stage.off .re-pill {
+  opacity: 0.45;
+}
+
+.re-pill {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  height: 60px;
+  box-sizing: border-box;
+  padding: 7px;
+  border-radius: 30px;
+  background: #000;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1);
+  transition: opacity 0.2s ease;
+}
+
+.re-zone {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  border: 1.5px dashed rgba(255, 255, 255, 0.28);
+  border-radius: 23px;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+.re-zone.re-ok {
+  border-color: var(--accent);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.re-drop {
+  font-size: 10.5px;
+  font-style: italic;
+  color: #7a7a83;
+}
+
+.re-chip {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  max-width: calc(100% - 8px);
+  max-height: calc(100% - 8px);
+  padding: 5px 12px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.09);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.16);
+  color: #e6e6ea;
+  font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif;
+  font-size: 12px;
+  cursor: grab;
+  touch-action: none;
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.re-chip:hover {
+  background: rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.34);
+}
+
+.re-chip:focus-visible {
+  outline: 2px solid var(--fg);
+  outline-offset: 2px;
+}
+
+.re-chip.re-lifted {
+  opacity: 0.3;
+}
+
+.re-body {
+  display: grid;
+  justify-items: center;
+  min-width: 0;
+  line-height: 1.15;
+  pointer-events: none;
+}
+
+.re-name {
+  max-width: 100%;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.re-from {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 9.5px;
+  color: #8e8e96;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.re-x {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: #3a3a40;
+  color: #f2f2f5;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.re-x .li {
+  width: 9px;
+  height: 9px;
+}
+
+.re-chip:hover .re-x,
+.re-chip:focus-within .re-x {
+  opacity: 1;
+}
+
+.re-ghost {
+  position: fixed;
+  z-index: 999;
+  height: 44px;
+  max-width: 180px;
+  pointer-events: none;
+  transform: rotate(-2.5deg) scale(1.04);
+  background: #26262b;
+  outline: 1.5px solid var(--accent);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.6);
+  transition: opacity 0.15s ease, outline-color 0.15s ease;
+}
+
+.re-ghost.re-out {
+  opacity: 0.55;
+  outline-color: #d46a6a;
+}
+
+.re-names {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 0 7px;
+  font-size: 10.5px;
+  text-align: center;
+  color: #6d6d75;
+}
+
+.re-names small {
+  margin-left: 4px;
+  font-size: 9.5px;
+  color: #5a5a62;
+}
+
+.re-note {
+  text-align: center;
+  font-size: 11.5px;
+  color: #9a9aa4;
+}
+
+.re-link {
+  margin: 10px 2px 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #6fdc9d;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.re-link:hover {
+  text-decoration: underline;
+}
+
+.re-detail .hh-tray {
+  margin-top: 12px;
+}
+
+/* (the eyes, as a picture) */
+.still-eyes i {
+  width: 7px;
+  height: 11px;
+}
+
+/* ---- the expanded island's editor: the head's rows, on stand-ins for the widgets (see head.js). The island at its real
+   width, the tray beside it (under it when the window is not wide enough for both) ---- */
+.ex-cols {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-start;
+  margin-top: 16px;
+}
+
+.ex-left {
+  flex: none;
+  max-width: 100%;
+}
+
+.ex-stage {
+  position: relative;
+  box-sizing: border-box;
+  border-radius: var(--r-hub);
+  background: #101013;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.07), 0 20px 50px rgba(0, 0, 0, 0.4);
+  color: var(--fg);
+  font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif;
+  user-select: none;
+}
+
+#ex-head,
+#ex-foot {
+  position: relative;
+}
+
+#ex-foot:not(:empty) {
+  border-top: 1px solid rgba(255, 255, 255, 0.045);
+}
+
+#ex-foot > .hh-add {
+  width: calc(100% - 32px);
+  margin: 0 16px 14px;
+}
+
+#ex-tray {
+  flex: 1 1 200px;
+  min-width: 200px;
+  user-select: none;
+}
+
+#ex-tray .hh-tray-h {
+  display: grid;
+  gap: 8px;
+}
+
+#ex-tray .hh-tile {
+  width: 84px;
+}
+
+#ex-tray .hh-switch {
+  justify-self: start;
+}
+
+#ex-tray .hh-tray-body {
+  max-height: 440px;
+}
+
+.ex-left .hh-bar {
+  margin-top: 10px;
+  padding: 0 2px;
+  background: none;
+}
+
+.ex-left .hh-bar p {
+  color: #8e8e96;
+}
+
+#pane-settings .hh-tools {
+  padding: 0 16px 12px;
+}
+
+@media (max-width: 860px) {
+  .re-md {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ---- pictures of widgets with made-up numbers, in the editors (see sample.js) ---- */
+.hh-pic {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: calc(var(--rowh, 76px) - 26px);
+  max-height: 52px;
+  overflow: hidden;
+}
+
+.dm {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  max-width: 100%;
+  color: var(--fg);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.dm-text {
+  display: grid;
+  justify-items: center;
+  line-height: 1.15;
+}
+
+.dm-text b {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+}
+
+.dm-text small {
+  font-size: 9.5px;
+  color: var(--fg-mute);
+}
+
+.dm-clock {
+  display: grid;
+  gap: 2px;
+  justify-items: start;
+}
+
+.dm-clock .hw-time {
+  font-size: 22px;
+}
+
+.dm-song {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.dm-song .dm-text {
+  justify-items: start;
+}
+
+.dm-art {
+  flex: none;
+  display: block;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, #8b3fd9, #e0457b);
+}
+
+.dm-dot {
+  flex: none;
+  display: block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e8963c;
+}
+
+.dm-btn {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.dm-ring {
+  display: block;
+  width: 22px;
+  height: 22px;
+}
+
+.dm-eq {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 20px;
+}
+
+.dm-eq i {
+  display: block;
+  width: 4px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+/* ---- the meters as circles: a row of small rings, each with its label inside ---- */
+.sf-rings {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sf-ring {
+  position: relative;
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+}
+
+.sf-ring svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.sf-ring circle:last-child {
+  transition: stroke-dasharray 0.6s var(--spring), stroke 0.3s ease;
+}
+
+.sf-ring b {
+  position: relative;
+  font-size: 7px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--fg-dim);
+}
+
+/* ---- the tiles of the open island: a grid of squares, one for each plugin (see tiles.js) ----
+   No icon in a corner: the picture behind the words is what a tile is about. */
+#tiles {
+  --cols: 8;
+  --tile: 44px;
+  display: grid;
+  grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
+  grid-auto-rows: var(--tile);
+  gap: var(--gap, 6px);
+  padding: 0 0 4px;
+}
+
+#tiles.hidden {
+  display: none;
+}
+
+.tl {
+  --c: #8e8e96;
+  --ring: var(--c);
+  position: relative;
+  display: block;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r-card);
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  user-select: none;
+  transition: transform 0.35s var(--spring), opacity 0.25s ease;
+}
+
+.tl:not(.tl-static):active {
+  transform: scale(0.97);
+}
+
+/* nothing to show, so nothing to press */
+.tl-static {
+  cursor: default;
+}
+
+.tl:focus-visible {
+  outline: 2px solid var(--fg);
+  outline-offset: 2px;
+}
+
+/* a tile with a picture has a flat colour of the picture's own; a bare one has no background */
+.tl-pic {
+  background: var(--fill, color-mix(in srgb, var(--c) 42%, #000));
+}
+
+.tl-bare .tl-big {
+  color: var(--c);
+}
+
+.tl-wide {
+  grid-column: 1 / -1;
+}
+
+.tl-large {
+  grid-column: span 2;
+  grid-row: span 2;
+}
+
+/* flat, 2D: a solid colour (the picture's own), the picture crisp in a corner, and nothing else: no gradient, no shadow */
+.tl-clip {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  overflow: hidden;
+}
+
+.tl-art {
+  position: absolute;
+  inset: 0;
+  background: no-repeat;
+}
+
+.tl-art.pic,
+.tl-art.cover {
+  background-size: cover;
+  background-position: center;
+  animation: tl-zoom 14s ease-in-out infinite alternate;
+}
+
+/* the plugin's own icon (not the picture of what is going on) is an icon: not the whole tile */
+.tl-art.icon {
+  background-size: 56%;
+}
+
+.tl-large .tl-art.icon {
+  background-size: 40%;
+}
+
+/* one flat dark layer over a picture, so that the words read */
+.tl-scrim {
+  display: none;
+  position: absolute;
+  inset: 0;
+  background: rgba(8, 8, 10, 0.45);
+}
+
+.tl-art.pic + .tl-scrim,
+.tl-art.cover + .tl-scrim {
+  display: block;
+}
+
+/* a small tile has no words over its picture: nothing darkens it (what is drawn over it has its own disc) */
+.tl-small .tl-art.pic + .tl-scrim {
+  display: none;
+}
+
+.tl-pic .tl-solo .tl-ring {
+  border-radius: 50%;
+  background: rgba(8, 8, 10, 0.6);
+}
+
+.tl-pic .tl-live {
+  background: #fff;
+}
+
+.tl-large .tl-art.cover + .tl-scrim {
+  inset: auto 0 0 0;
+  height: 54%;
+}
+
+@keyframes tl-zoom {
+  to {
+    transform: scale(1.08);
+  }
+}
+
+@keyframes tl-pop {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+@keyframes tl-alert {
+  50% {
+    outline-color: transparent;
+  }
+}
+
+/* at rest: no picture, no background, no border: only the words, quiet */
+.tl-idle {
+  background: none;
+}
+
+/* the words */
+.tl-face {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 8px;
+}
+
+.tl-small .tl-face {
+  padding: 0;
+}
+
+.tl-face.tl-row {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 12px;
+}
+
+/* a small tile: only a number or a glyph, in the middle */
+.tl-solo {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  min-width: 0;
+}
+
+.tl-solo .tl-big {
+  font-size: 18px;
+  font-weight: 500;
+  letter-spacing: -0.03em;
+}
+
+.tl-solo[data-len="4"] .tl-big {
+  font-size: 15px;
+}
+
+.tl-solo[data-len="5"] .tl-big,
+.tl-solo[data-len="6"] .tl-big {
+  font-size: 12px;
+}
+
+.tl-solo .tl-ic {
+  display: grid;
+  place-items: center;
+  color: var(--c);
+}
+
+.tl-solo .tl-ic .li {
+  width: 18px;
+  height: 18px;
+}
+
+/* a status tile: working is three dots going up and down, waiting is a knock (the icon shakes, a ring goes out from the tile), done is a tick */
+.tl[data-state] .tl-solo .tl-ic .li {
+  width: 20px;
+  height: 20px;
+}
+
+.tl-dots {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 5px;
+  display: flex;
+  justify-content: center;
+  gap: 3px;
+}
+
+.tl-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #fff;
+  animation: tl-dot 1.8s ease-in-out infinite;
+}
+
+.tl-dots i:nth-child(2) {
+  animation-delay: 0.25s;
+}
+
+.tl-dots i:nth-child(3) {
+  animation-delay: 0.5s;
+}
+
+.tl-ok {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #5ac88c;
+  color: #0b1a12;
+  animation: tl-pop 0.5s var(--spring) backwards;
+}
+
+/* a tick in the corner of a tile that is about something else (it has its own picture or glyph) */
+.tl-ok.badge {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 16px;
+  height: 16px;
+}
+
+.tl-ok.badge .li {
+  width: 10px;
+  height: 10px;
+}
+
+.tl-ok .li {
+  width: 14px;
+  height: 14px;
+  stroke-width: 3;
+}
+
+.tl[data-state="waiting"] .tl-art {
+  animation: tl-knock 2.6s ease-in-out infinite;
+}
+
+.tl[data-state="waiting"] .tl-solo .tl-ic {
+  animation: tl-knock 2.6s ease-in-out infinite;
+}
+
+.tl[data-state="waiting"] .tl-face::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: var(--r-card);
+  border: 2px solid var(--c);
+  pointer-events: none;
+  animation: tl-ping 2.6s ease-out infinite;
+}
+
+@keyframes tl-dot {
+  50% {
+    transform: translateY(-4px);
+    opacity: 0.5;
+  }
+}
+
+@keyframes tl-knock {
+  0%,
+  40%,
+  100% {
+    transform: rotate(0);
+  }
+  10%,
+  30% {
+    transform: rotate(-9deg) scale(1.08);
+  }
+  20% {
+    transform: rotate(9deg) scale(1.08);
+  }
+}
+
+@keyframes tl-ping {
+  from {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+  to {
+    transform: scale(1.4);
+    opacity: 0;
+  }
+}
+
+/* water: it fills the tile as far as the percent, with two waves on top that go the other way round; flat colour, no gradient */
+.tl-wet {
+  background: color-mix(in srgb, var(--c) 16%, #111114);
+}
+
+.tl-water {
+  position: absolute;
+  inset: 0;
+  --lv: 0;
+}
+
+.tw-body {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--c) 78%, #000);
+  transform: translateY(calc((100 - var(--lv)) * 1%));
+  transition: transform 1.2s cubic-bezier(0.3, 0.8, 0.3, 1);
+}
+
+.tw-wave {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% - 1px);
+  width: 200%;
+  height: 9px;
+  animation: tw-slide 3.4s linear infinite;
+}
+
+.tw-wave svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  fill: color-mix(in srgb, var(--c) 78%, #000);
+}
+
+.tw-wave.b {
+  height: 7px;
+  opacity: 0.5;
+  animation-duration: 5.1s;
+  animation-direction: reverse;
+}
+
+@keyframes tw-slide {
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+.tl-wet .tl-solo .tl-ic {
+  color: #fff;
+}
+
+.tl-wet .tl-solo .tl-ic .li {
+  width: 16px;
+  height: 16px;
+}
+
+/* a ring that fills: the percent of a download, the load of a game */
+.tl-ring {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  color: var(--c);
+}
+
+.tl-ring svg.tr {
+  position: absolute;
+  inset: 0;
+  transform: rotate(-90deg);
+  fill: none;
+  stroke-width: 3;
+}
+
+.tl-ring .tr-track {
+  stroke: rgba(255, 255, 255, 0.16);
+}
+
+.tl-ring .tr-arc {
+  stroke: var(--c);
+  stroke-linecap: round;
+  transition: stroke-dasharray 0.6s ease;
+}
+
+.tl-pic .tl-ring .tr-arc {
+  stroke: #fff;
+}
+
+.tl-ring .li {
+  width: 14px;
+  height: 14px;
+}
+
+/* something is going on that has no end to show: a small bar under it that slowly breathes */
+.tl-live {
+  position: absolute;
+  left: calc(50% - 7px);
+  bottom: 5px;
+  width: 14px;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--ring);
+  animation: tl-breathe 2.8s ease-in-out infinite;
+}
+
+@keyframes tl-breathe {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.tl-idle .tl-solo .tl-ic {
+  color: #5f5f67;
+}
+
+.tl-pic .tl-solo .tl-big {
+  color: #fff;
+}
+
+.tl-bot {
+  margin-top: auto;
+  min-width: 0;
+}
+
+.tl-big {
+  font-size: 27px;
+  font-weight: 300;
+  letter-spacing: -0.035em;
+  line-height: 1;
+  animation: tl-pop 0.5s var(--spring) backwards;
+}
+
+.tl-big.tl-small {
+  font-size: 20px;
+}
+
+.tl-nm {
+  overflow: hidden;
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.tl-nm.tl-lg {
+  font-size: 15px;
+  letter-spacing: -0.01em;
+}
+
+.tl-cap {
+  overflow: hidden;
+  margin-top: 3px;
+  font-size: 10px;
+  line-height: 1.2;
+  color: rgba(255, 255, 255, 0.72);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tl-idle .tl-big {
+  font-size: 19px;
+  font-weight: 400;
+  color: #5f5f67;
+  animation: none;
+}
+
+.tl-idle .tl-nm {
+  color: #9a9aa4;
+}
+
+.tl-idle .tl-cap {
+  color: #6d6d75;
+}
+
+.tl-alert {
+  outline: 2px solid var(--c);
+  animation: tl-alert 1.6s ease-in-out infinite;
+}
+
+.tl-eq {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 12px;
+}
+
+.tl-eq i {
+  display: block;
+  width: 2px;
+  height: 7px;
+  border-radius: 1px;
+  background: #fff;
+  animation: tl-eq 0.9s ease-in-out infinite alternate;
+}
+
+.tl-eq i:nth-child(2) {
+  height: 11px;
+  animation-delay: -0.3s;
+}
+
+.tl-eq i:nth-child(3) {
+  height: 8px;
+  animation-delay: -0.6s;
+}
+
+@keyframes tl-eq {
+  to {
+    transform: scaleY(0.45);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tl-eq i {
+    animation: none;
+  }
+}
+
+/* the date, as a block (Today) */
+.tl-date {
+  flex: none;
+  width: 46px;
+  text-align: center;
+}
+
+.tl-dow {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.tl-day {
+  font-size: 26px;
+  font-weight: 300;
+  line-height: 1;
+  letter-spacing: -0.03em;
+}
+
+.tl-mid {
+  flex: 1;
+  min-width: 0;
+}
+
+.tl-mid.has-widget {
+  display: flex;
+  align-items: center;
+}
+
+.tl-right {
+  flex: none;
+  text-align: right;
+}
+
+/* the rings of the system: the number inside, the label under */
+.tl-widget {
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  width: 100%;
+}
+
+.tl-widget:empty {
+  display: none;
+}
+
+.tl-widget .sf-rings {
+  width: 100%;
+  justify-content: space-around;
+  gap: 8px;
+}
+
+.tl-widget .sf-ring {
+  width: 34px;
+  height: 34px;
+}
+
+.tl-widget .sf-ring b {
+  font-size: 10.5px;
+  color: #fff;
+}
+
+/* (a row is only as high as a small tile: the label is the tooltip) */
+.tl-widget .sf-ring em {
+  display: none;
+}
+
+/* what is playing: the buttons under the words */
+.tl-controls {
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 9px;
+}
+
+.tl-btn {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+  cursor: pointer;
+}
+
+.tl-btn:hover {
+  background: rgba(255, 255, 255, 0.32);
+}
+
+.tl-btn.main {
+  background: #fff;
+  color: #101013;
+}
+
+.tl-btn .li {
+  width: 11px;
+  height: 11px;
+}
+
+/* selected: the picture sharpens, a ring in its own colour, a notch to the page; the others step back */
+.tl-sel {
+  z-index: 2;
+  transform: scale(1.02);
+  outline: 2px solid var(--ring);
+}
+
+.tl-sel::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -9px;
+  width: 16px;
+  height: 9px;
+  margin-left: -8px;
+  background: var(--ring);
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+}
+
+#tiles.has-sel .tl:not(.tl-sel) {
+  opacity: 0.5;
+  filter: saturate(0.7);
+}
+
+.tl-lifted {
+  opacity: 0.35;
+}
+
+.tl-ghost {
+  position: absolute;
+  z-index: 60;
+  pointer-events: none;
+  transform: rotate(-2deg) scale(1.04);
+  background: #26262b;
+  box-shadow: 0 14px 30px rgba(0, 0, 0, 0.6);
+}
+
+/* ---- under the tiles: the notifications, or the page of the tile that is pressed (it has the colour of its tile) ---- */
+#tile-area {
+  --pg: #8e8e96;
+  min-height: 0;
+}
+
+#now-cards.hidden {
+  display: none;
+}
+
+#tile-area.paged #notif-history {
+  display: none;
+}
+
+.tl-empty {
+  padding: 18px 4px;
+  text-align: center;
+  font-size: 12px;
+  color: #6d6d75;
+}
+
+/* ---- the tiles view of the Expanded Island page (see tilesedit.js) ---- */
+.te-seg-top {
+  display: inline-flex;
+  margin-top: 16px;
+  padding: 3px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.te-seg-top button {
+  padding: 6px 16px;
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  color: #9a9aa4;
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.te-seg-top button.on {
+  background: rgba(255, 255, 255, 0.12);
+  color: #f2f2f5;
+  font-weight: 600;
+}
+
+#ex-cards.hidden,
+#ex-headview.hidden {
+  display: none;
+}
+
+.te-cols {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: flex-start;
+  margin-top: 16px;
+}
+
+.te-hub {
+  flex: none;
+  box-sizing: border-box;
+  padding: 14px 16px 16px;
+  border-radius: var(--r-hub);
+  background: #101013;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.07), 0 20px 50px rgba(0, 0, 0, 0.4);
+  user-select: none;
+}
+
+.te-grid {
+  --cols: 8;
+  --tile: 44px;
+  display: grid;
+  grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
+  grid-auto-rows: var(--tile);
+  gap: var(--gap, 6px);
+}
+
+.te-tile {
+  display: flex;
+  flex-direction: column;
+  padding: 5px;
+  border-radius: var(--r-card);
+  background: rgba(255, 255, 255, 0.055);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  cursor: grab;
+  touch-action: none;
+}
+
+.te-tile:active {
+  transform: none;
+}
+
+.te-cell {
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.025);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+.te-target {
+  z-index: 2;
+  border-radius: 20px;
+  border: 1.5px dashed var(--accent);
+  background: rgba(255, 255, 255, 0.06);
+  pointer-events: none;
+}
+
+.te-off .te-nm {
+  color: #8e8e96;
+}
+
+.te-tile .tl-ic {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  background: var(--c, #8e8e96);
+  color: #fff;
+}
+
+.te-tile .tl-ic .li {
+  width: 12px;
+  height: 12px;
+}
+
+.te-tile .tl-bot {
+  margin-top: auto;
+}
+
+.te-tile .tl-nm {
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.te-tile .tl-cap {
+  font-size: 10px;
+  color: #8e8e96;
+}
+
+.te-grip {
+  position: absolute;
+  top: 9px;
+  right: 10px;
+  color: #6d6d75;
+}
+
+.te-grip .li {
+  width: 14px;
+  height: 14px;
+  stroke-width: 2.4;
+}
+
+.te-ghost {
+  position: fixed;
+  z-index: 999;
+  font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif;
+}
+
+.te-panel {
+  flex: 1 1 260px;
+  min-width: 260px;
+}
+
+.te-grp {
+  margin: 0 2px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: #8e8e96;
+}
+
+.te-grp-2 {
+  margin-top: 18px;
+}
+
+.te-card {
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.045);
+  overflow: hidden;
+}
+
+.te-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 48px;
+  padding: 0 10px 0 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 12.5px;
+}
+
+.te-row:first-child {
+  border-top: 0;
+}
+
+.te-nm {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.te-seg {
+  display: inline-flex;
+  padding: 2px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.te-seg button {
+  padding: 3px 9px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: #8e8e96;
+  font: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.te-seg button.on {
+  background: rgba(255, 255, 255, 0.14);
+  color: #f2f2f5;
+}
+
+.te-only {
+  font-size: 10.5px;
+  color: #6d6d75;
+}
+
+.te-hint {
+  margin-top: 10px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: #8e8e96;
+}
+
+.te-none {
+  padding: 30px 0;
+  font-size: 13px;
+  color: #8e8e96;
+}
+
+.pg-remove {
+  align-self: flex-start;
+  margin-top: 4px;
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  color: #e5675c;
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.pg-remove:hover {
+  text-decoration: underline;
+}
+
+.pg-remove:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* a narrow window: the sidebar is its icons (the search opens over the page when it is used) */
+@media (max-width: 720px) {
+  #set-side {
+    position: relative;
+    width: 56px;
+    padding: 12px 8px;
+  }
+  .set-find {
+    justify-content: center;
+    width: 40px;
+    padding: 0;
+  }
+  .set-find #set-find {
+    flex: none;
+    width: 0;
+    opacity: 0;
+  }
+  .set-find:focus-within {
+    position: absolute;
+    z-index: 6;
+    top: 12px;
+    left: 8px;
+    justify-content: flex-start;
+    width: 250px;
+    padding: 0 10px;
+  }
+  .set-find:focus-within #set-find {
+    flex: 1;
+    width: auto;
+    opacity: 1;
+  }
+  #set-nav button {
+    justify-content: center;
+    width: 40px;
+    padding: 0;
+  }
+  #set-nav button span {
+    display: none;
+  }
 }

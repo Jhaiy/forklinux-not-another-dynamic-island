@@ -202,7 +202,21 @@ export function frame(now, dt, island) {
 	const lr = layer?.getBoundingClientRect();
 	// (the island may be drawn smaller than it is laid out: what the layer measures in pixels the page lays out in)
 	const k = layer && layer.offsetWidth ? lr.width / layer.offsetWidth : 1;
+	// (the plugins that have a widget place to draw at, and the ones whose place is on show now)
+	const placed = new Set();
+	const hasPlace = new Set();
+	for (const pl of places.values()) {
+		hasPlace.add(pl.plugin);
+		if (pl.node.isConnected && pl.node.offsetParent !== null) placed.add(pl.plugin);
+	}
 	for (const f of frames.values()) {
+		// (the resting island is what the user chose: a face that draws at its widget's place, and whose widget is in none of the
+		// sections, draws nothing there)
+		if (f.spec.slot === "island" && view.name === "idle") {
+			const away = hasPlace.has(f.plugin) && !placed.has(f.plugin);
+			f.node.style.visibility = away ? "hidden" : "";
+			if (away) continue;
+		}
 		if (f.placeholder) {
 			// a widget: its frame follows its place; no place on show (the head is not there, the widget is out of the head) and
 			// the frame is left alone

@@ -2,7 +2,8 @@
 // plugin that is not a Rust plugin with its own face (ui/plugins/*.js) goes through this, and so do those that want to:
 // a module or a declarative plugin hands the island data (see plugins.rs: `CardOut`, `PillOut`, `RingOut`) and never any
 // markup, so every text goes in as text, every picture is a `data:` raster, and a button only names an action.
-import { FLOATS, ICON, addPill, addRing, call, collapsible, el, host, invoke, li, listen, peek, ringEls, setRing, textCol, view } from "./kit.js";
+import { guideReader } from "./reader.js";
+import { FLOATS, ICON, LLM_RING_C, focusButton, addPill, addRing, call, collapsible, el, host, invoke, li, listen, llmStateIcon, peek, ringEls, setRing, textCol, view } from "./kit.js";
 
 // ---------------------------------------------------------------------------------- a moment inside a text
 
@@ -27,8 +28,8 @@ const hasWhen = (s) => typeof s === "string" && s.includes("{when:");
 // ----------------------------------------------------------------------------------------------- the blocks
 
 /** the blocks a plugin can ask for, each built once and then updated in place as the numbers change */
-export function pluginBlock(b, plugin) {
-	const block = pluginBlockOf(b, plugin);
+export function pluginBlock(b, plugin, cardId = "") {
+	const block = pluginBlockOf(b, plugin, cardId);
 	block.kind = b.kind;
 	return block;
 }
@@ -53,7 +54,66 @@ function buttonRow(items, plugin) {
 	return box;
 }
 
-function pluginBlockOf(b, plugin) {
+const iconOf = (name) => (Object.hasOwn(ICON, name) ? ICON[name] : li(name));
+
+/** a button of a player's own kind: a round icon (or its words when it has none), pressing it calls the plugin back */
+function roundButton(it, plugin, cls) {
+	const b = el("button", cls);
+	b.type = "button";
+	b.title = it.label || "";
+	b.dataset.tip = it.label || "";
+	b.dataset.icon = it.icon || "";
+	if (it.icon) b.innerHTML = iconOf(it.icon);
+	else b.textContent = it.label;
+	b.addEventListener("mousedown", (e) => e.stopPropagation());
+	b.addEventListener("click", (e) => {
+		e.stopPropagation();
+		call(plugin, it.action).catch(() => {});
+	});
+	return b;
+}
+
+/** the buttons in a card's header, at the right */
+function controlsRow(items, plugin) {
+	const box = el("div", "now-controls");
+	for (const it of items) box.append(roundButton(it, plugin, ""));
+	return box;
+}
+
+// The bytes of a page's picture come once per picture (the card only holds its id); the island keeps the last few.
+const pageImages = new Map();
+async function showPageImage(img, plugin, id) {
+	let src = pageImages.get(`${plugin}:${id}`);
+	if (src === undefined) {
+		try {
+			src = (await invoke("browser_get", { plugin, what: "image", args: { id } })) || null;
+		} catch (_) {
+			src = null;
+		}
+		pageImages.set(`${plugin}:${id}`, src);
+		if (pageImages.size > 12) pageImages.delete(pageImages.keys().next().value);
+	}
+	// (the card may have moved on to another picture while this was fetched)
+	if (img.dataset.id !== String(id)) return;
+	if (src) {
+		img.src = src;
+		img.classList.add("ready");
+	} else {
+		img.classList.remove("ready");
+	}
+	host.scheduleHubHeight();
+}
+
+function pictureNode(plugin, id) {
+	const img = el("img", "pk-img");
+	img.alt = "";
+	img.draggable = false;
+	img.dataset.id = String(id);
+	showPageImage(img, plugin, id);
+	return img;
+}
+
+function pluginBlockOf(b, plugin, cardId) {
 	if (b.kind === "progress") {
 		const bar = el("div", "pg-bar");
 		const fill = el("i");
@@ -73,9 +133,112 @@ function pluginBlockOf(b, plugin) {
 			update: (n) => n.values.forEach((v, i) => bars[i] && (bars[i].style.height = `${Math.max(6, Math.round(v * 100))}%`)),
 		};
 	}
+	if (b.kind === "text" && b.label) {
+		// a paragraph that opens with a word in bold (the prompt a session is answering): two lines at most
+		const p = el("p", "llm-prompt");
+		return {
+			node: p,
+			update: (n) => {
+				p.replaceChildren(el("b", "", n.label), document.createTextNode(whenText(n.text)));
+				p.hidden = !n.text;
+			},
+		};
+	}
 	if (b.kind === "text" || b.kind === "badge") {
 		const t = el("div", b.kind === "text" ? "pg-text" : "pg-badge");
 		return { node: t, update: (n) => (t.textContent = whenText(n.text)) };
+	}
+	if (b.kind === "picture") {
+		// the page's main picture, from the browser extension
+		const img = pictureNode(plugin, b.id);
+		return {
+			node: img,
+			update: (n) => {
+				if (img.dataset.id !== String(n.id)) {
+					img.dataset.id = String(n.id);
+					showPageImage(img, plugin, n.id);
+				}
+			},
+		};
+	}
+	if (b.kind === "reader") {
+		// a guide laid out to be read (see reader.js): the words come from the island's own link to the browser extension, and
+		// a press on a section asks the plugin to send the tab there
+		const key = `plugin:${plugin}:${cardId}`;
+		const ask = (cmd, args) => {
+			if (cmd === "page_guide") return invoke("browser_get", { plugin, what: "guide", args });
+			if (cmd === "page_guide_image") return invoke("browser_get", { plugin, what: "picture", args });
+			return call(plugin, "go", { url: args.url, card: cardId }).then(() => true);
+		};
+		const holder = el("div", "pg-reader");
+		const image = b.image != null ? pictureNode(plugin, b.image) : null;
+		holder.append(
+			guideReader({
+				el,
+				li,
+				invoke: ask,
+				key: b.key,
+				exe: "",
+				page: "",
+				pageKey: key,
+				image,
+				onSize: host.scheduleHubHeight,
+				onMoved: () => host.refresh(),
+				onTyping: FLOATS ? (on) => invoke("float_typing", { on }) : null,
+			}),
+		);
+		return { node: holder, update: () => {} };
+	}
+	if (b.kind === "lines") {
+		// icon rows: what it is doing (lit), and what it did
+		const box = el("div", "llm-feed");
+		return {
+			node: box,
+			update: (n) =>
+				box.replaceChildren(
+					...n.rows.map((r) => {
+						const row = el("div", r.now ? "llm-fr now" : "llm-fr");
+						row.innerHTML = li(r.icon || "dot");
+						row.append(el("span", "", whenText(r.text)));
+						return row;
+					}),
+				),
+		};
+	}
+	if (b.kind === "meter") {
+		const box = el("div", "llm-ctx");
+		const bar = el("i");
+		const val = el("em");
+		box.append(el("span"), bar, val);
+		return {
+			node: box,
+			update: (n) => {
+				box.firstChild.textContent = n.label;
+				bar.style.setProperty("--v", `${Math.round(n.value * 100)}%`);
+				if (n.color) bar.style.setProperty("--c", n.color);
+				val.textContent = n.text;
+			},
+		};
+	}
+	if (b.kind === "stats") {
+		const box = el("div", "llm-stats");
+		const cells = b.items.map(() => {
+			const cell = el("div", "llm-stat");
+			const num = el("b");
+			const name = el("span");
+			cell.append(num, name);
+			box.append(cell);
+			return { num, name };
+		});
+		return {
+			node: box,
+			update: (n) =>
+				n.items.forEach((it, i) => {
+					if (!cells[i]) return;
+					cells[i].num.textContent = it.value;
+					cells[i].name.textContent = it.label;
+				}),
+		};
 	}
 	if (b.kind === "facts") {
 		const box = el("div", "pk-fields");
@@ -106,7 +269,55 @@ function pluginBlockOf(b, plugin) {
 			fill.style.width = `${Math.round(fraction * 100)}%`;
 			call(plugin, b.action, { fraction }).catch(() => {});
 		});
-		return { node: bar, update: (n) => (fill.style.width = `${Math.round(n.value * 100)}%`) };
+		if (!b.before?.length && !b.after?.length) return { node: bar, update: (n) => (fill.style.width = `${Math.round(n.value * 100)}%`) };
+		// with buttons at its sides it is a player's row: a jump back, the bar, a jump forward and the speed
+		bar.className = "now-seek";
+		fill.className = "hub-media-seek-fill";
+		const row = el("div", "media-extra");
+		const side = (items) => items.map((it) => roundButton(it, plugin, it.icon ? "media-jump" : "media-rate"));
+		const left = side(b.before || []);
+		const right = side(b.after || []);
+		row.append(...left, bar, ...right);
+		const all = [...(b.before || []), ...(b.after || [])];
+		return {
+			node: row,
+			update: (n) => {
+				fill.style.width = `${Math.round(n.value * 100)}%`;
+				// (a button's words change, the speed: the buttons themselves stay)
+				[...left, ...right].forEach((btn, i) => {
+					const now = [...(n.before || []), ...(n.after || [])][i];
+					if (now && !all[i].icon && btn.textContent !== now.label) btn.textContent = now.label;
+				});
+			},
+		};
+	}
+	if (b.kind === "graph") {
+		// a line through numbers (frame times, a speed), from 0 to `max`, with a faint line at each mark; drawn as shapes, from numbers only
+		const NS = "http://www.w3.org/2000/svg";
+		const box = el("div", "pg-graph");
+		const svg = document.createElementNS(NS, "svg");
+		svg.setAttribute("viewBox", "0 0 120 54");
+		svg.setAttribute("preserveAspectRatio", "none");
+		const part = (cls) => {
+			const p = document.createElementNS(NS, "path");
+			p.setAttribute("class", cls);
+			return p;
+		};
+		const area = part("a");
+		const line = part("l");
+		const marks = part("g");
+		svg.append(area, line, marks);
+		box.append(svg);
+		return {
+			node: box,
+			update: (n) => {
+				const y = (v) => (52 - Math.min(v / (n.max || 1), 1) * 50).toFixed(1);
+				const pts = n.values.map((v, i) => `${i ? "L" : "M"}${((i / Math.max(1, n.values.length - 1)) * 120).toFixed(1)} ${y(v)}`).join(" ");
+				line.setAttribute("d", pts);
+				area.setAttribute("d", n.values.length > 1 ? `${pts} L120 54 L0 54 Z` : "");
+				marks.setAttribute("d", n.marks.map((m) => `M0 ${y(m)} L120 ${y(m)}`).join(" "));
+			},
+		};
 	}
 	if (b.kind === "buttons") {
 		// (rebuilt when the buttons change: see the card's signature)
@@ -147,7 +358,8 @@ function pluginBlockOf(b, plugin) {
 const blockSig = (b) =>
 	b.kind +
 	(b.action || "") +
-	(b.rows ? `${b.rows.length}${b.rows.map((r) => (r.progress != null ? "p" : "")).join("")}` : b.values ? b.values.length : b.items ? b.items.map((i) => `${i.action}/${i.icon}/${i.label}`).join("|") : "");
+	(b.before || b.after ? [...(b.before || []), ...(b.after || [])].map((i) => i.action).join("|") : "") +
+	(b.rows ? `${b.rows.length}${b.rows.map((r) => (r.progress != null ? "p" : "")).join("")}` : b.kind === "graph" ? "" : b.values ? b.values.length : b.items ? b.items.map((i) => `${i.action}/${i.icon}/${i.label}`).join("|") : "");
 
 export function pluginCard(c) {
 	const card = el("div", "now-card spot pg-card");
@@ -159,11 +371,30 @@ export function pluginCard(c) {
 	art.alt = "";
 	art.draggable = false;
 	tile.append(art);
+	// (or a letter in a colour with a ring around it: how full something is)
+	let ring = null;
+	let letter = null;
+	if (c.tile) {
+		letter = el("div", "llm-tile");
+		letter.innerHTML = `<span></span><svg class="cr" viewBox="0 0 40 40"><circle class="rb" cx="20" cy="20" r="18"/><circle class="rf" cx="20" cy="20" r="18"/></svg>`;
+		ring = letter.querySelector(".rf");
+		ring.style.strokeDasharray = String(LLM_RING_C);
+	}
 	const col = textCol(c.title, c.sub);
-	row.append(tile, col);
+	row.append(letter || tile, col);
+	card.classList.toggle("llm-card", !!(c.tile || c.tone));
+	// (the second line may open with an icon, and read as what it is doing)
+	const subLine = col.querySelector(".now-sub");
+	// (small icons at the right, and how it stands as one icon)
+	const right = c.badges?.length || c.tone ? el("div", "llm-right") : null;
+	if (right) row.append(right);
+	let lastTone = null;
+	// (a player's buttons sit in the header, as they always did)
+	const controls = c.controls?.length ? controlsRow(c.controls, c.plugin) : null;
+	if (controls) row.append(controls);
 	card.append(row);
 	const body = el("div", "work-body pg-body");
-	const blocks = c.body.map((b) => pluginBlock(b, c.plugin));
+	const blocks = c.body.map((b) => pluginBlock(b, c.plugin, c.id || ""));
 	for (const b of blocks) body.append(b.node);
 	if (blocks.length) card.append(body);
 	const update = (d) => {
@@ -173,8 +404,44 @@ export function pluginCard(c) {
 		}
 		art.classList.toggle("hidden", !d.image);
 		tile.classList.toggle("has-art", !!d.image);
+		// (play turns into pause: the icon changes, the button stays)
+		d.controls?.forEach((it, i) => {
+			const btn = controls?.children[i];
+			if (btn && btn.dataset.icon !== it.icon) {
+				btn.dataset.icon = it.icon;
+				btn.innerHTML = iconOf(it.icon);
+				btn.dataset.tip = btn.title = it.label || "";
+			}
+		});
 		col.querySelector(".now-title").textContent = whenText(d.title);
-		col.querySelector(".now-sub").textContent = whenText(d.sub);
+		if (d.sub_icon || d.tone) {
+			subLine.className = `now-sub llm-live ${d.tone || ""}`;
+			subLine.innerHTML = d.sub_icon ? li(d.sub_icon) : "";
+			subLine.append(el("span", "", whenText(d.sub)));
+		} else {
+			subLine.textContent = whenText(d.sub);
+		}
+		if (d.tile && letter) {
+			letter.style.setProperty("--c", d.tile.color);
+			letter.firstChild.textContent = d.tile.text;
+			if (d.tile.ring != null) {
+				ring.style.strokeDashoffset = String(LLM_RING_C * (1 - d.tile.ring));
+				ring.style.stroke = d.tile.ring_color;
+			}
+			ring.parentElement.style.display = d.tile.ring == null ? "none" : "";
+		}
+		card.classList.toggle("llm-waiting", d.tone === "waiting");
+		if (right && (d.tone !== lastTone || !right.firstChild)) {
+			lastTone = d.tone;
+			right.replaceChildren();
+			for (const b of d.badges || []) {
+				const host = el("span", "llm-host");
+				host.innerHTML = li(b.icon);
+				host.dataset.tip = b.tip;
+				right.append(host);
+			}
+			if (d.tone) right.append(llmStateIcon(d.tone));
+		}
 		const pk = card.querySelector(".now-peek");
 		if (pk) pk.textContent = whenText(d.peek);
 		d.body.forEach((n, i) => blocks[i] && blocks[i].kind === n.kind && blocks[i].update(n));
@@ -182,7 +449,7 @@ export function pluginCard(c) {
 	if (c.peek) peek(card, c.peek);
 	update(c);
 	// the cards are rebuilt only when their shape changes; new numbers go in place
-	card._sig = `pg:${c.plugin}:${c.id || ""}:${c.icon}:${c.peek ? "p" : ""}:${c.body.map(blockSig).join(",")}`;
+	card._sig = `pg:${c.plugin}:${c.id || ""}:${c.icon}:${c.peek ? "p" : ""}:${c.tile ? "t" : ""}:${(c.badges || []).length}:${(c.controls || []).map((i) => i.action).join("|")}:${c.body.map(blockSig).join(",")}`;
 	// (a moment in a text reads "Today" or "Tomorrow", which change at midnight: rebuilt by the day)
 	if ([c.title, c.sub, c.peek, JSON.stringify(c.body)].some(hasWhen)) card._sig += `:${new Date().toDateString()}`;
 	card._data = c;
@@ -190,7 +457,14 @@ export function pluginCard(c) {
 	card._rank = c.rank || 70;
 	card.dataset.plugin = c.plugin;
 	card.addEventListener("mousedown", (e) => e.stopPropagation());
-	return collapsible(card, `plugin:${c.plugin}${c.id ? `:${c.id}` : ""}`);
+	const wrapped = collapsible(card, `plugin:${c.plugin}${c.id ? `:${c.id}` : ""}`);
+	// (the icon goes to what the card is about: the browser window of a page)
+	if (c.focus) focusButton(wrapped, () => call(c.plugin, c.focus, { card: c.id || "" }).catch(() => {}));
+	// (wide enough, a page's picture moves to the side: see .wide in hub.css)
+	if (c.body.some((b) => b.kind === "picture" || (b.kind === "reader" && b.image != null))) {
+		new ResizeObserver(() => card.classList.toggle("wide", card.clientWidth >= 520)).observe(card);
+	}
+	return wrapped;
 }
 
 // a live card (a meter) is sent as it changes, not when the next poll comes
@@ -215,6 +489,7 @@ function pillParts(id) {
 		`pg-${id}`,
 		`<div class="pg-tile"><img class="pg-art hidden" alt="" draggable="false" /></div>
 		<div class="text-col"><div class="line-main"></div><div class="line-sub"></div></div>
+		<div class="pg-rows"></div>
 		<span class="pg-meters"></span>
 		<span class="pg-right"></span>
 		<span class="pg-pbuttons"></span>
@@ -228,6 +503,8 @@ function pillParts(id) {
 		main: node.querySelector(".line-main"),
 		sub: node.querySelector(".line-sub"),
 		meters: node.querySelector(".pg-meters"),
+		rows: node.querySelector(".pg-rows"),
+		text: node.querySelector(".text-col"),
 		right: node.querySelector(".pg-right"),
 		buttons: node.querySelector(".pg-pbuttons"),
 		bar: node.querySelector(".pg-pbar"),
@@ -245,6 +522,8 @@ function pillParts(id) {
 
 function setPill(pill) {
 	const p = pillParts(pill.plugin);
+	// (a pill that comes by itself, to say something, glows like a banner: main.js reads this)
+	p.node.dataset.brief = pill.brief ? "1" : "";
 	if (p.icon !== pill.icon) {
 		p.icon = pill.icon;
 		p.tile.innerHTML = li(pill.icon);
@@ -262,6 +541,28 @@ function setPill(pill) {
 	p.main.textContent = whenText(pill.title);
 	p.sub.textContent = whenText(pill.sub);
 	p.sub.classList.toggle("hidden", !pill.sub);
+	// rows of a label, a bar and a number (a limit that moved): the bars slide to the new numbers
+	const rows = pill.rows || [];
+	p.node.classList.toggle("pg-has-rows", rows.length > 0);
+	p.text.classList.toggle("hidden", rows.length > 0);
+	if (p.rows.childElementCount !== rows.length) {
+		p.rows.replaceChildren(
+			...rows.map(() => {
+				const r = el("div", "peek-row");
+				const fill = el("div", "peek-fill animating");
+				const track = el("div", "peek-track");
+				track.append(fill);
+				r.append(el("span", "peek-label"), track, el("span", "peek-pct"));
+				return r;
+			}),
+		);
+	}
+	rows.forEach((r, i) => {
+		const node = p.rows.children[i];
+		node.firstChild.textContent = r.label;
+		node.querySelector(".peek-fill").style.width = `${Math.round(r.value * 100)}%`;
+		node.lastChild.textContent = r.text;
+	});
 	p.right.textContent = whenText(pill.right);
 	p.right.classList.toggle("hidden", !pill.right);
 	// meters: one bar each, the heights follow the numbers
@@ -300,7 +601,13 @@ function setPluginRings(plugin, rings) {
 	for (const r of rings) {
 		const key = `pg-${plugin}-${r.id}`;
 		now.add(key);
-		if (!ringEls[key]) addRing(key, r.color, plugin, 45, r.start !== false).el.dataset.name = `${plugin} · ${r.id}`;
+		if (!ringEls[key]) {
+			const made = addRing(key, r.color, plugin, 45, r.start !== false);
+			// (named for the tray: "CPU Ring", "Five Hour Ring"; the plugin's name is its group's)
+				made.el.dataset.name = `${String(r.id).split(/[_-]/).map((w) => (w.length <= 3 ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1))).join(" ")} Ring`;
+			// (a click on a ring is the plugin's to answer: asking again, say)
+			made.el.addEventListener("click", () => call(plugin, "ring", { id: r.id }).catch(() => {}));
+		}
 		else {
 			ringEls[key].fg.setAttribute("stroke", r.color);
 			ringEls[key].el.dataset.color = r.color;

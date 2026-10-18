@@ -302,23 +302,6 @@ pub fn float_set(state: tauri::State<'_, Arc<IslandState>>, item: FloatItem) {
     state.floats.save();
 }
 
-/// A card that floats has moved on with its tab (to the next section of a guide): it keeps its place, under its new key.
-pub fn rekey(app: &AppHandle, state: &IslandState, old: &str, new: &str) {
-    {
-        let mut items = state.floats.items.lock().unwrap();
-        if !items.iter().any(|i| i.key == old) {
-            return;
-        }
-        items.retain(|i| i.key != new);
-        if let Some(i) = items.iter_mut().find(|i| i.key == old) {
-            i.key = new.to_string();
-        }
-    }
-    if let Some(layer) = app.get_webview_window(LABEL) {
-        let _ = layer.emit("float-rekey", serde_json::json!({ "old": old, "new": new }));
-    }
-}
-
 /// A floating card goes back to the island.
 #[tauri::command]
 pub fn float_remove(state: tauri::State<'_, Arc<IslandState>>, key: String) {

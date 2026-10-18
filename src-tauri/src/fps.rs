@@ -1,6 +1,6 @@
-//! Frames per second of the games, from the "Present" events Windows emits for every swap-chain
+//! Frames per second of the programs a module watches, from the "Present" events Windows emits for every swap-chain
 //! present (DXGI: DirectX 11 and 12 games) -- the way PresentMon counts frames. An ETW trace session
-//! is started only while the hub shows a game card (calls to `touch` keep it alive) and stopped a few
+//! is started only while a module watches a program (calls to `touch` keep it alive) and stopped a few
 //! seconds after the last call. Reading real-time ETW needs administrator rights or membership of the
 //! "Performance Log Users" group; without them `denied()` is true and there are simply no FPS numbers.
 

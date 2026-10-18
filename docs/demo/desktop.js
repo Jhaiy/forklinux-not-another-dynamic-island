@@ -22,6 +22,7 @@
         music: [Math.max(520, dw - 28 - 330), 84, 330, 218],
         browser: [Math.min(540, Math.max(60, dw - 470)), 150, 450, 340],
         chat: [Math.min(580, Math.max(80, dw - 430)), 210, 400, 330],
+        settings: [Math.max(8, (dw - 900) / 2), 40, Math.min(900, dw - 16), Math.max(380, Math.min(640, desk.clientHeight - 80))],
       }[id] || [100, 100, 400, 300]
     );
   }
@@ -342,6 +343,27 @@ pub fn view_size(view: PillView, width: u64) -> (f64, f64) {
   // ------------------------------------------------------------ the game: a borderless full-screen window
   let gameRaf = 0;
   const CREATE = { code: createCode, term: createTerm, music: createMusic, browser: createBrowser, chat: createChat };
+
+  // the settings are a window of their own in the app (the tray's menu): here, a window of the desktop with the same page in it
+  W.ICONS.settings = "data:image/svg+xml;utf8," + encodeURIComponent("<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='#f2f2f5'/><circle cx='16' cy='16' r='4.2' fill='none' stroke='#18181b' stroke-width='2'/><path d='M16 6v3M16 23v3M6 16h3M23 16h3M9 9l2 2M21 21l2 2M23 9l-2 2M11 21l-2 2' stroke='#18181b' stroke-width='2' stroke-linecap='round'/></svg>");
+  function createSettings(page) {
+    make("settings", "Settings", `<iframe class="setframe" title="Settings" src="demo/ui/index.html?settings=1${page ? `&page=${page}` : ""}"></iframe>`, (w) => {
+      const f = $("iframe", w);
+      NADI.extraFrames.add(f);
+      // (the desktop's window has the title bar and the buttons: the page's own are for the app)
+      f.addEventListener("load", () => {
+        const s = f.contentDocument.createElement("style");
+        s.textContent = "html.settings #set-bar{display:none}";
+        f.contentDocument.head.append(s);
+      });
+    });
+  }
+  NADI.openSettings = (page) => {
+    if (!wins.settings) return createSettings(page);
+    openApp("settings");
+    if (page) NADI.emit("settings-page", page);
+  };
+  NADI.closeSettings = (action) => (action === "close" ? close("settings") : minimise("settings"));
   function createGame() {
     const el = document.createElement("div");
     el.className = "win gamewin";
@@ -477,10 +499,7 @@ pub fn view_size(view: PillView, width: u64) -> (f64, f64) {
     const m = e.target.closest("button")?.dataset.m;
     menu.hidden = true;
     if (m === "hub") NADI.openHubFromTray();
-    if (m === "settings") {
-      NADI.emit("open-settings", null);
-      NADI.openHubFromTray();
-    }
+    if (m === "settings") NADI.openSettings();
     if (m === "show") st.shown = true;
     if (m === "quit") toast("Quit is switched off in the demo. In NADI it closes the app.");
   });
@@ -526,10 +545,7 @@ pub fn view_size(view: PillView, width: u64) -> (f64, f64) {
     },
     time: () => C.time_preview(),
     hub: () => NADI.openHubFromTray(),
-    settings() {
-      NADI.emit("open-settings", null);
-      NADI.openHubFromTray();
-    },
+    settings: () => NADI.openSettings(),
     open: openApp,
     toast,
   };

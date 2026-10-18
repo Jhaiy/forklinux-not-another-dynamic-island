@@ -2,7 +2,7 @@
 // sends blocks, never markup (see plugins.rs `clean_blocks`); this file draws them, and a press on one comes back to the module
 // as an `action` event ("widget" or "pane", with the id the block named). The Calendar plugin's date and month are drawn here.
 import { head } from "../head.js";
-import { FLOATS, call, el, host, invoke, listen, view, withIcon } from "../kit.js";
+import { FLOATS, call, el, host, invoke, li, listen, view, withIcon } from "../kit.js";
 
 const state = new Map(); // plugin -> { widgets: { id: { blocks, tip } }, pane }
 const widgetEls = new Map(); // "plugin:id" -> the element the head holds for it
@@ -59,7 +59,23 @@ function draw(box, blocks, plugin, where) {
 				track.append(fill);
 				row.append(el("b", null, x.label), track);
 				if (wide) row.append(el("span", null, x.text));
+				// (a few words under the bar, so the number at its right keeps its room)
+				if (wide && x.sub) row.append(el("em", null, x.sub));
 				list.append(row);
+			}
+			box.append(list);
+		} else if (b.rings) {
+			// (the same meters as the bars, as circles: the label inside, the share around it)
+			const list = el("div", "sf-rings");
+			for (const x of b.rings) {
+				const c = 2 * Math.PI * 9;
+				const ring = el("span", "sf-ring");
+				ring.dataset.tip = x.text ? `${x.label} · ${x.text}` : x.label;
+				ring.dataset.part = String(Math.round(x.part * 100));
+				ring.dataset.label = x.label;
+				ring.innerHTML = `<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="rgba(255,255,255,.14)" stroke-width="3"/><circle cx="12" cy="12" r="9" fill="none" stroke="${x.color}" stroke-width="3" stroke-linecap="round" stroke-dasharray="${(c * x.part).toFixed(2)} ${c.toFixed(2)}" transform="rotate(-90 12 12)"/></svg>`;
+				ring.append(el("b", null, x.label));
+				list.append(ring);
 			}
 			box.append(list);
 		} else if (b.head != null) {
@@ -122,6 +138,31 @@ function draw(box, blocks, plugin, where) {
 				list.append(row);
 			});
 			box.append(list);
+		} else if (b.item) {
+			// a picture or an icon, and a line of words (a song, a download)
+			const row = el("span", "sf-item");
+			const tile = el("span", "sf-tile");
+			if (b.item.tile) {
+				const img = document.createElement("img");
+				img.src = b.item.tile;
+				img.alt = "";
+				tile.append(img);
+			} else tile.innerHTML = li(b.item.icon || "dot");
+			const words = el("span", "sf-words");
+			words.append(el("b", null, b.item.text));
+			if (b.item.sub) words.append(el("small", null, b.item.sub));
+			row.append(tile, words);
+			box.append(row);
+		} else if (b.icon_button) {
+			const x = el("button", "sf-ibtn");
+			x.type = "button";
+			x.innerHTML = li(b.icon_button.icon || "dot");
+			if (b.icon_button.label) x.setAttribute("aria-label", b.icon_button.label);
+			x.addEventListener("click", (e) => {
+				e.stopPropagation();
+				press(plugin, where, b.icon_button.press);
+			});
+			box.append(x);
 		} else if (b.buttons) {
 			const row = el("div", "sf-buttons");
 			for (const x of b.buttons) {
@@ -150,6 +191,17 @@ function moveBars(node, blocks) {
 		fill.style.width = `${Math.round(x.part * 100)}%`;
 		fill.style.background = x.color;
 	});
+	return true;
+}
+
+/** draw what a widget of a plugin shows now into `box` (a tile's face): false when it shows nothing yet. `ref`: "widget" or "plugin:widget" */
+export function drawInto(box, plugin, ref) {
+	let at = plugin;
+	let id = ref;
+	if (ref.includes(":")) [at, id] = ref.split(":");
+	const blocks = state.get(at)?.widgets?.[id]?.blocks || [];
+	if (!blocks.length) return false;
+	draw(box, blocks, at, "widget");
 	return true;
 }
 

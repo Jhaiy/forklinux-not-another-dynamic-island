@@ -28,8 +28,10 @@ const GRANTS: &[(&str, &str, &str)] = &[
     ("notifications", "Read the notifications that other apps show (their title and text).", ""),
     ("program details", "See the full path, the name and the icon of the programs that have a window.", ""),
     ("storage", "Keep a small file of its own (up to 64 KB) between runs.", ""),
+    ("claude sessions", "See your Claude Code sessions: what each is doing, its title, its folder and the prompt it is answering (from the files Claude Code keeps).", ""),
+    ("downloads", "See what your browsers, Steam and qBittorrent are downloading now: the file names and how far along they are.", ""),
     ("open links", "Open links in other programs.", "Open links that start with {}: they open the program that handles them."),
-    ("browser extension", "Receive what the NADI browser extension sends about your open tabs.", ""),
+    ("browser extension", "Receive what the NADI browser extension sends about your open tabs (what the pages say), press a button of a page, and send a tab to another page of its site.", ""),
     ("media", "See what is playing: the title, the artist and how far along it is.", ""),
     ("media pictures", "See the cover picture of what is playing.", ""),
     ("media control", "Press play, pause, next and previous for the player.", ""),
@@ -44,11 +46,6 @@ const GRANTS: &[(&str, &str, &str)] = &[
 pub fn grants(name: &str, detail: &str) -> Option<String> {
     let (_, plain, of) = GRANTS.iter().find(|(n, _, _)| *n == name)?;
     Some(if detail.is_empty() || of.is_empty() { plain.to_string() } else { of.replace("{}", detail) })
-}
-
-#[cfg(test)]
-pub fn known(name: &str) -> bool {
-    GRANTS.iter().any(|(n, _, _)| *n == name)
 }
 
 #[cfg(test)]

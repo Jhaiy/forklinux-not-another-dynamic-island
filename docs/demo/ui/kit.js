@@ -8,9 +8,14 @@ const { listen: listenAll } = window.__TAURI__.event;
 // The floating cards live in a second window that runs this same page (see floats.rs): it draws nothing but
 // those cards (and the modals, see modal.rs), so it only listens for its own events and skips the island's animations and polling.
 export const FLOATS = new URLSearchParams(location.search).has("floats");
+// The settings window runs this page too (see settingswin.rs): it draws only the settings, and hears only what they need.
+export const SETTINGS = new URLSearchParams(location.search).has("settings");
+const FOR_SETTINGS = /^(settings-|plugins-changed|plugin-setting|rest-changed|head-|tiles-|modal-)/;
 export const listen = FLOATS
 	? (name, cb) => (name.startsWith("float-") || name.startsWith("modal-") ? listenAll(name, cb) : Promise.resolve(() => {}))
-	: listenAll;
+	: SETTINGS
+		? (name, cb) => (FOR_SETTINGS.test(name) ? listenAll(name, cb) : Promise.resolve(() => {}))
+		: listenAll;
 
 /** the island's view now ("idle", "hub", a plugin's pill...): main.js keeps it */
 export const view = { name: "idle" };
@@ -129,6 +134,8 @@ export const LI_PATHS = {
 	fwd: "M12.8 8a4.8 4.8 0 1 0-1.4 3.4M13 4v3.2h-3.2",
 	folder: "M2 4.5A1.5 1.5 0 0 1 3.5 3h2.8l1.4 1.5h4.8A1.5 1.5 0 0 1 14 6v5.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5z",
 	refresh: "M13 8a5 5 0 1 1-1.6-3.7M13 2.8v2.7h-2.7",
+	trash: "M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5M6.8 7v3.6M9.2 7v3.6",
+	external: "M6.5 3.5h-3v9h9v-3M9 2.5h4.5V7M13.5 2.5 7.5 8.5",
 	download: "M8 2.5v7.6M4.8 7.3 8 10.5l3.2-3.2M3 13h10",
 	up: "M8 13V3M3.5 7.5 8 3l4.5 4.5",
 	repost: "M3 7V6a2 2 0 0 1 2-2h7M10 2l2 2-2 2M13 9v1a2 2 0 0 1-2 2H4M6 14l-2-2 2-2",
@@ -163,7 +170,15 @@ export const LI_PATHS = {
 	globe: "M8 2a6 6 0 1 0 0 12A6 6 0 0 0 8 2zM2 8h12M8 2c2 1.7 2.8 3.7 2.8 6S10 12.3 8 14c-2-1.7-2.8-3.7-2.8-6S6 3.7 8 2z",
 	dot: "M8 6.2a1.8 1.8 0 1 0 0 3.6 1.8 1.8 0 0 0 0-3.6z",
 	plus: "M8 3.5v9M3.5 8h9",
+	left: "M10 3.5 5.5 8l4.5 4.5",
+	dots: "M3.5 8h.01M8 8h.01M12.5 8h.01",
 	minus: "M3.5 8h9",
+	grip: "M6 4h.01M10 4h.01M6 8h.01M10 8h.01M6 12h.01M10 12h.01",
+	maximize: "M3.5 3.5h9v9h-9z",
+	restore: "M5.5 5.5h7v7h-7zM3.5 10.5v-7h7",
+	info: "M8 14a6 6 0 1 0 0-12 6 6 0 0 0 0 12zM8 7.2v4M8 4.9v.1",
+	gear: "M8 5.8a2.2 2.2 0 1 0 0 4.4 2.2 2.2 0 0 0 0-4.4zM8 1.8v1.7M8 12.5v1.7M1.8 8h1.7M12.5 8h1.7M3.6 3.6l1.2 1.2M11.2 11.2l1.2 1.2M12.4 3.6l-1.2 1.2M4.8 11.2l-1.2 1.2",
+	island: "M4.5 5h7a3 3 0 0 1 0 6h-7a3 3 0 0 1 0-6z",
 	x: "M4 4l8 8M12 4l-8 8",
 	clock: "M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11zM8 5v3.2l2.2 1.3",
 	sliders:
@@ -291,7 +306,7 @@ export function collapsible(card, key) {
 	card._inHeader = (e) => {
 		if (
 			e.target.closest(
-				"button:not(.card-toggle), .now-seek, .media-extra, .rate-menu, .work-body, .dl-list",
+				"button:not(.card-toggle), .now-seek, .media-extra, .rate-menu, .work-body",
 			)
 		)
 			return false;
@@ -310,7 +325,7 @@ export function collapsible(card, key) {
 		const more =
 			bodies ||
 			card.querySelector(
-				".dl-list, .now-seek:not(.hidden), .media-extra:not(.hidden)",
+				".now-seek:not(.hidden), .media-extra:not(.hidden)",
 			);
 		card.classList.toggle("flat-card", !more);
 		if (!more) card.classList.remove("open");

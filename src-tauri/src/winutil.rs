@@ -380,29 +380,6 @@ pub fn pid_alive(pid: u32) -> bool {
 }
 
 
-/// (pid, exe path, window title) of whatever has focus.
-pub fn foreground_info() -> Option<(u32, Option<String>, String)> {
-    use windows::Win32::UI::WindowsAndMessaging::{GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId};
-    let hwnd: HWND = unsafe { GetForegroundWindow() };
-    if hwnd.is_invalid() {
-        return None;
-    }
-    let len = unsafe { GetWindowTextLengthW(hwnd) };
-    let title = if len > 0 {
-        let mut buf = vec![0u16; len as usize + 1];
-        let written = unsafe { GetWindowTextW(hwnd, &mut buf) };
-        String::from_utf16_lossy(&buf[..written.max(0) as usize])
-    } else {
-        String::new()
-    };
-    let mut pid: u32 = 0;
-    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
-    if pid == 0 {
-        return None;
-    }
-    Some((pid, exe_path_for_pid(pid), title))
-}
-
 /// Seconds since the last key or mouse input.
 pub fn idle_seconds() -> Option<f64> {
     use windows::Win32::System::SystemInformation::GetTickCount;
@@ -415,8 +392,30 @@ pub fn idle_seconds() -> Option<f64> {
     Some((tick.wrapping_sub(lii.dwTime) as f64 / 1000.0).max(0.0))
 }
 
-/// "chrome" for `C:\...\chrome.exe`: a program's name for people
-pub fn exe_stem(path: &str) -> String {
-    let file = path.rsplit(['\\', '/']).next().unwrap_or(path);
-    file.strip_suffix(".exe").or(file.strip_suffix(".EXE")).unwrap_or(file).to_string()
+/// Covers its whole monitor and has no title bar: exclusive or borderless fullscreen, as games are. (A maximized browser or
+/// editor keeps its title bar, however much of the screen it fills.)
+pub fn fullscreen_captionless(hwnd: HWND) -> bool {
+    use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongW, GetWindowRect, GWL_STYLE, WS_CAPTION};
+    let mut rect = RECT::default();
+    if unsafe { GetWindowRect(hwnd, &mut rect) }.is_err() {
+        return false;
+    }
+    let mut mi = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+    if !unsafe { GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mut mi) }.as_bool() {
+        return false;
+    }
+    let mon = mi.rcMonitor;
+    let covers = rect.left <= mon.left && rect.top <= mon.top && rect.right >= mon.right && rect.bottom >= mon.bottom;
+    let style = unsafe { GetWindowLongW(hwnd, GWL_STYLE) } as u32;
+    covers && style & WS_CAPTION.0 == 0
+}
+
+/// Show a file in its folder, selected (Explorer).
+pub fn reveal_file(path: &str) {
+    use std::os::windows::process::CommandExt;
+    if path.contains('"') {
+        return;
+    }
+    let _ = std::process::Command::new("explorer.exe").raw_arg(format!("/select,\"{path}\"")).creation_flags(0x0800_0000).spawn();
 }

@@ -111,16 +111,6 @@ export function guideReader({ el, li, invoke, key, exe, page, pageKey, image, on
 		}
 	}).observe(root);
 
-	const cached = guides.get(key);
-	if (cached) draw(cached);
-	else {
-		root.append(el("div", "gd-load", "Reading the guide…"));
-		load(invoke, key).then((g) => {
-			if (g) draw(g);
-			else root.replaceChildren(el("div", "gd-load", "The guide is not available any more."));
-		});
-	}
-
 	// ---- the pieces
 	// label and value pairs, one to a row
 	function factsList(pairs) {
@@ -502,6 +492,17 @@ export function guideReader({ el, li, invoke, key, exe, page, pageKey, image, on
 		};
 		if (!ok) return fail("The tab could not be sent there.");
 		setTimeout(() => st.busy && fail("The page did not load."), 15000);
+	}
+
+	// (the words are drawn once everything above exists)
+	const cached = guides.get(key);
+	if (cached) draw(cached);
+	else {
+		root.append(el("div", "gd-load", "Reading the guide…"));
+		load(invoke, key).then((g) => {
+			if (g) draw(g);
+			else root.replaceChildren(el("div", "gd-load", "The guide is not available any more."));
+		});
 	}
 
 	return root;

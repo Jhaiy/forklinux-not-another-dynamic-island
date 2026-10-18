@@ -1,83 +1,27 @@
-//! Downloads: what is being downloaded right now, from the browsers,
-//! Steam and qBittorrent. A plugin (see native.rs). Nothing here talks to those apps -- it watches what
-//! they leave on disk:
+//! The downloads sensor: what is being downloaded right now, from the browsers, Steam and qBittorrent, for the modules that
+//! may see it (`permissions.downloads`). Nothing here talks to those apps; it watches what they leave on disk:
 //!
-//! * Chromium browsers (Chrome, Edge, Brave, Vivaldi, Opera): a growing
-//!   `.crdownload` file, named and sized through the browser's own history
-//!   database (read in place, read-only).
+//! * Chromium browsers (Chrome, Edge, Brave, Vivaldi, Opera): a growing `.crdownload` file, named and sized through the
+//!   browser's own history database (read in place, read-only).
 //! * Firefox: a growing `<name>.part` file.
-//! * Steam: files growing under `steamapps/downloading`, named from the app's
-//!   `appmanifest_*.acf`.
-//! * qBittorrent: torrents that are unfinished and not paused (from its
-//!   `BT_backup` folder) whose files changed in the last few seconds.
+//! * Steam: files growing under `steamapps/downloading`, named from the app's `appmanifest_*.acf`.
+//! * qBittorrent: torrents that are unfinished and not paused (from its `BT_backup` folder) whose files changed in the last
+//!   few seconds.
 //!
-//! Only active downloads are listed. One that finishes stays on the list, marked
-//! done, until it is clicked (a browser download then also opens its folder).
+//! The module is told what each poll saw (`observed`) and, for one that stopped showing up, whether it finished or was
+//! given up (`ended`). What a module does with that (a card, a pill, how long a finished one stays) is its own.
 
-use crate::native::{manifest_of, old_flag, Adopted, Ctx, Native};
-use crate::plugins::Manifest;
-use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
-const POLL_MS: u64 = 1500;
 /// a file touched this recently counts as "being downloaded"
 const ACTIVE_S: u64 = 15;
 /// not seen for this long: check whether it finished
 const GONE_S: f64 = 4.0;
 /// not seen and not finished for this long: it was cancelled or paused
 const DROP_S: f64 = 20.0;
-/// still listed, not finished, but nothing moved for this long: it is stuck or paused, so it goes
-const STALL_S: f64 = 5.0;
-
-/// what the plugin is, as the island's list shows it
-pub fn manifest() -> Manifest {
-    manifest_of(include_str!("downloads.json"))
-}
-
-/// what the plugin takes over from the settings the app had before it was a plugin
-pub fn adopted(old: &Value, default_on: bool) -> Adopted {
-    Adopted { on: old_flag(old, "download_detection", default_on), values: Default::default() }
-}
-
-#[derive(Serialize, Clone)]
-pub struct DownloadItem {
-    pub id: String,
-    pub source: String,
-    /// "browser", "steam" or "torrent"
-    pub kind: String,
-    pub name: String,
-    pub received: u64,
-    pub total: Option<u64>,
-    /// bytes per second
-    pub speed: f64,
-    pub done: bool,
-    /// the app behind it, so a click on an active download can bring that app up
-    exe_path: Option<String>,
-    /// that app's icon (data URL), filled in when the list is handed to the UI
-    icon: Option<String>,
-    /// what opening a finished browser download reveals
-    #[serde(skip)]
-    open_path: Option<String>,
-    #[serde(skip)]
-    meta: String,
-    #[serde(skip)]
-    last_bytes: u64,
-    #[serde(skip)]
-    last_at: Instant,
-    #[serde(skip)]
-    seen: Instant,
-    #[serde(skip)]
-    started: Instant,
-    /// when bytes last came in
-    #[serde(skip)]
-    moved: Instant,
-}
 
 /// what one poll saw for one active download
 struct Obs {
@@ -87,19 +31,10 @@ struct Obs {
     name: String,
     received: u64,
     total: Option<u64>,
-    exe_path: Option<String>,
     open_path: Option<String>,
     meta: String,
-    /// bytes per second, when the source knows it (else it is worked out from progress)
+    /// bytes per second, when the source knows it (else the module works it out from progress)
     speed: Option<f64>,
-}
-
-/// every download, whatever its source, on one card
-#[derive(Serialize)]
-pub struct DownloadCard {
-    /// combined speed of the active ones, bytes per second
-    speed: f64,
-    items: Vec<DownloadItem>,
 }
 
 // ---------------------------------------------------------------------------
@@ -131,14 +66,6 @@ fn partials(dir: &Path, exts: &[&str]) -> Vec<(PathBuf, u64)> {
             recent(m.modified().ok()?).then(|| (p, m.len()))
         })
         .collect()
-}
-
-fn first_existing(candidates: &[String]) -> Option<String> {
-    candidates.iter().find(|p| Path::new(p).exists()).cloned()
-}
-
-fn env_path(var: &str, tail: &str) -> String {
-    format!("{}\\{}", std::env::var(var).unwrap_or_default(), tail)
 }
 
 /// newest modification time, total size and file count under `path` (bounded walk)
@@ -175,29 +102,6 @@ const CHROMIUM: &[(&str, &str)] = &[
     ("Vivaldi", "vivaldi.exe"),
     ("Opera", "opera.exe"),
 ];
-
-fn browser_exe(stem: &str) -> Option<String> {
-    let pf = env_path("ProgramFiles", "");
-    let pf86 = env_path("ProgramFiles(x86)", "");
-    let local = env_path("LOCALAPPDATA", "");
-    let list: Vec<String> = match stem {
-        "chrome.exe" => vec![
-            format!("{pf}Google\\Chrome\\Application\\chrome.exe"),
-            format!("{pf86}Google\\Chrome\\Application\\chrome.exe"),
-            format!("{local}Google\\Chrome\\Application\\chrome.exe"),
-        ],
-        "msedge.exe" => vec![
-            format!("{pf86}Microsoft\\Edge\\Application\\msedge.exe"),
-            format!("{pf}Microsoft\\Edge\\Application\\msedge.exe"),
-        ],
-        "brave.exe" => vec![format!("{pf}BraveSoftware\\Brave-Browser\\Application\\brave.exe")],
-        "vivaldi.exe" => vec![format!("{local}Vivaldi\\Application\\vivaldi.exe")],
-        "opera.exe" => vec![format!("{local}Programs\\Opera\\opera.exe")],
-        "firefox.exe" => vec![format!("{pf}Mozilla Firefox\\firefox.exe"), format!("{pf86}Mozilla Firefox\\firefox.exe")],
-        _ => vec![],
-    };
-    first_existing(&list)
-}
 
 fn pct_encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 8);
@@ -256,8 +160,7 @@ fn chromium_active(dirs: &[PathBuf], tracked: bool) -> Vec<Obs> {
                 name,
                 received: meta.len().max(received_db.max(0) as u64),
                 total: (total > 0).then_some(total as u64),
-                exe_path: browser_exe(stem),
-                open_path: Some(target),
+                    open_path: Some(target),
                 meta: stem.to_string(),
                 speed: None,
             });
@@ -286,7 +189,6 @@ fn firefox_active(dirs: &[PathBuf]) -> Vec<Obs> {
                 name,
                 received: len,
                 total: None,
-                exe_path: browser_exe("firefox.exe"),
                 open_path: Some(final_path.to_string_lossy().to_string()),
                 meta: "firefox".into(),
                 speed: None,
@@ -450,7 +352,6 @@ fn steam_active(root: &Path, m: &mut SteamMeter) -> Vec<Obs> {
         name: acf.get("name").cloned().unwrap_or_else(|| format!("App {appid}")),
         received,
         total,
-        exe_path: Some(root.join("steam.exe").to_string_lossy().to_string()).filter(|p| Path::new(p).exists()),
         open_path: None,
         meta: format!("{}|{appid}", lib.to_string_lossy()),
         speed: Some(rate),
@@ -636,13 +537,6 @@ fn refresh_torrents(dir: &Path, cache: &mut TorrentCache) {
     cache.retain(|k, _| alive.contains(k));
 }
 
-fn qbittorrent_exe() -> Option<String> {
-    first_existing(&[
-        env_path("ProgramFiles", "qBittorrent\\qbittorrent.exe"),
-        env_path("ProgramFiles(x86)", "qBittorrent\\qbittorrent.exe"),
-    ])
-}
-
 /// per torrent: the resume file the progress was last read from, how many bytes
 /// were estimated on top of it since (the resume file is only saved now and then),
 /// and whether its files were being written when last looked at
@@ -666,7 +560,6 @@ const TORRENT_CHECK_S: f64 = 3.0;
 /// them) as their speed, and their progress is carried forward with it until the
 /// next save corrects it.
 fn torrents_active(cache: &TorrentCache, track: &mut HashMap<String, TorrentTrack>, rate: f64) -> Vec<Obs> {
-    let exe = qbittorrent_exe();
     let now = Instant::now();
     track.retain(|k, _| cache.contains_key(k));
     let mut listed: Vec<&Torrent> = Vec::new();
@@ -711,7 +604,6 @@ fn torrents_active(cache: &TorrentCache, track: &mut HashMap<String, TorrentTrac
             name: t.name.clone(),
             received: received as u64,
             total: (t.total > 0).then_some(t.total),
-            exe_path: exe.clone(),
             open_path: Some(t.content.to_string_lossy().to_string()),
             meta: t.resume.to_string_lossy().to_string(),
             speed: Some(speed),
@@ -737,295 +629,122 @@ fn qbittorrent_running(sys: &mut sysinfo::System) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// the poll loop
+// the sensor
 
-/// downloads that were dropped for standing still: id -> the bytes they had. One that is
-/// still stuck is not listed again; it comes back when it moves.
-fn stalled() -> &'static std::sync::Mutex<HashMap<String, u64>> {
-    static S: std::sync::OnceLock<std::sync::Mutex<HashMap<String, u64>>> = std::sync::OnceLock::new();
-    S.get_or_init(|| std::sync::Mutex::new(HashMap::new()))
+/// what a download that has been seen needs, to be asked about when it stops showing up
+struct Tracked {
+    kind: &'static str,
+    meta: String,
+    open_path: Option<String>,
+    seen: Instant,
 }
 
-fn merge(items: &mut Vec<DownloadItem>, seen: Vec<Obs>) {
-    let now = Instant::now();
-    for o in seen {
-        match items.iter_mut().find(|i| i.id == o.id && !i.done) {
-            Some(it) => {
-                if o.received > it.received || o.speed.map_or(false, |s| s > 0.0) {
-                    it.moved = now;
-                }
-                let dt = now.duration_since(it.last_at).as_secs_f64();
-                if dt >= 0.5 {
-                    let inst = o.received.saturating_sub(it.last_bytes) as f64 / dt;
-                    it.speed = if it.speed == 0.0 { inst } else { it.speed * 0.6 + inst * 0.4 };
-                    it.last_bytes = o.received;
-                    it.last_at = now;
-                }
-                if let Some(s) = o.speed {
-                    it.speed = s;
-                }
-                it.received = o.received;
-                it.total = o.total;
-                it.name = o.name;
-                it.seen = now;
-            }
-            None => {
-                // a finished one that is still on the list is not re-added
-                if items.iter().any(|i| i.id == o.id) {
-                    continue;
-                }
-                // one that was dropped for standing still stays off the list until it moves
-                {
-                    let mut st = stalled().lock().unwrap();
-                    match st.get(&o.id) {
-                        Some(&bytes) if o.received <= bytes && !o.speed.map_or(false, |s| s > 0.0) => continue,
-                        Some(_) => {
-                            st.remove(&o.id);
-                        }
-                        None => {}
-                    }
-                }
-                items.push(DownloadItem {
-                    id: o.id,
-                    source: o.source,
-                    kind: o.kind.to_string(),
-                    name: o.name,
-                    received: o.received,
-                    total: o.total,
-                    speed: 0.0,
-                    done: false,
-                    exe_path: o.exe_path,
-                    icon: None,
-                    open_path: o.open_path,
-                    meta: o.meta,
-                    last_bytes: o.received,
-                    last_at: now,
-                    seen: now,
-                    started: now,
-                    moved: now,
-                });
-            }
+pub struct Sensor {
+    sys: sysinfo::System,
+    steam: SteamMeter,
+    qbt: IoMeter,
+    qbt_running: bool,
+    qbt_checked: Instant,
+    torrents: TorrentCache,
+    torrent_track: HashMap<String, TorrentTrack>,
+    torrents_at: Instant,
+    tracked: HashMap<String, Tracked>,
+}
+
+impl Default for Sensor {
+    fn default() -> Self {
+        let long_ago = Instant::now() - Duration::from_secs(60);
+        Sensor {
+            sys: sysinfo::System::new(),
+            steam: SteamMeter::default(),
+            qbt: IoMeter::default(),
+            qbt_running: false,
+            qbt_checked: long_ago,
+            torrents: HashMap::new(),
+            torrent_track: HashMap::new(),
+            torrents_at: long_ago,
+            tracked: HashMap::new(),
         }
     }
-    // downloads that stopped showing up: finished, or dropped
-    for it in items.iter_mut().filter(|i| !i.done) {
-        let gone = now.duration_since(it.seen).as_secs_f64();
-        if gone < GONE_S {
-            continue;
+}
+
+/// Did a download that no longer shows up finish? (`Some(path)`: yes, and where it is.)
+fn finished(t: &Tracked, id: &str) -> Option<Option<String>> {
+    let done = match t.kind {
+        "steam" => steam_finished(&t.meta),
+        "torrent" => torrent_finished(&t.meta),
+        _ if t.meta == "firefox" => {
+            let fin = t.open_path.as_deref().map_or(false, |p| Path::new(p).exists());
+            let part_left = id.strip_prefix("firefox:").map_or(false, |p| Path::new(p).exists());
+            fin && !part_left
         }
-        let finished = match it.kind.as_str() {
-            "steam" => steam_finished(&it.meta),
-            "torrent" => torrent_finished(&it.meta),
-            _ if it.meta == "firefox" => {
-                let fin = it.open_path.as_deref().map_or(false, |p| Path::new(p).exists());
-                let part_left = it.id.strip_prefix("firefox:").map_or(false, |p| Path::new(p).exists());
-                fin && !part_left
-            }
-            _ => match it.id.split_once(':').and_then(|(stem, id)| Some((stem.to_string(), id.parse::<i64>().ok()?))) {
-                Some((stem, id)) => match chromium_state(&stem, id) {
-                    Some((1, target)) => {
-                        it.open_path = Some(target);
-                        true
-                    }
-                    _ => false,
-                },
-                None => false,
+        _ => match id.split_once(':').and_then(|(stem, id)| Some((stem.to_string(), id.parse::<i64>().ok()?))) {
+            Some((stem, id)) => match chromium_state(&stem, id) {
+                Some((1, target)) => return Some(Some(target)),
+                _ => false,
             },
-        };
-        if finished {
-            it.done = true;
-            it.speed = 0.0;
-            if let Some(t) = it.total {
-                it.received = t;
-            }
-        }
-    }
-    items.retain(|i| i.done || now.duration_since(i.seen).as_secs_f64() < DROP_S);
-    // listed and not finished, but nothing has moved for a while: stuck or paused
-    let mut st = stalled().lock().unwrap();
-    if st.len() > 64 {
-        st.clear();
-    }
-    items.retain(|i| {
-        let stuck = !i.done && now.duration_since(i.moved).as_secs_f64() > STALL_S;
-        if stuck {
-            st.insert(i.id.clone(), i.received);
-        }
-        !stuck
-    });
+            None => false,
+        },
+    };
+    done.then(|| t.open_path.clone())
 }
 
-fn run(ctx: Ctx, list: Arc<Mutex<Vec<DownloadItem>>>) {
-    std::thread::spawn(move || {
-        // background work: never compete with the UI
-        unsafe {
-            let _ = windows::Win32::System::Threading::SetThreadPriority(
-                windows::Win32::System::Threading::GetCurrentThread(),
-                windows::Win32::System::Threading::THREAD_PRIORITY_BELOW_NORMAL,
-            );
+impl Sensor {
+    /// One look. `{ "observed": [...], "ended": [...] }`: what is downloading now, and what stopped showing up (finished, with
+    /// the place of the file; or given up).
+    pub fn poll(&mut self) -> Value {
+        let now = Instant::now();
+        let dirs: Vec<PathBuf> = downloads_dir().into_iter().collect();
+        let tracked_browser = self.tracked.values().any(|t| t.kind == "browser");
+
+        let mut seen: Vec<Obs> = Vec::new();
+        seen.extend(chromium_active(&dirs, tracked_browser));
+        seen.extend(firefox_active(&dirs));
+        if self.qbt_checked.elapsed() > Duration::from_secs(10) {
+            self.qbt_running = qbittorrent_running(&mut self.sys);
+            self.steam.io.pid = process_pid(&self.sys, "steam.exe");
+            self.qbt.pid = process_pid(&self.sys, "qbittorrent.exe");
+            self.qbt_checked = now;
         }
-        let mut sys = sysinfo::System::new();
-        let mut steam_meter = SteamMeter::default();
-        let mut qbt_meter = IoMeter::default();
-        let mut qbt_running = false;
-        let mut qbt_checked = Instant::now() - Duration::from_secs(60);
-        let mut torrents: TorrentCache = HashMap::new();
-        let mut torrent_track: HashMap<String, TorrentTrack> = HashMap::new();
-        let mut torrents_at = Instant::now() - Duration::from_secs(60);
-        // debug aid: pretend a few downloads exist (`DI_DEMO_DOWNLOADS=1`) to look at the cards
-        let demo = std::env::var_os("DI_DEMO_DOWNLOADS").is_some();
-        let demo_start = Instant::now();
-        let open_hub = std::env::var_os("DI_OPEN_HUB").is_some();
-        let bt_dir = std::env::var_os("LOCALAPPDATA").map(|p| PathBuf::from(p).join("qBittorrent").join("BT_backup"));
-        loop {
-            std::thread::sleep(Duration::from_millis(POLL_MS));
-            if !ctx.on() {
-                list.lock().unwrap().clear();
-                std::thread::sleep(Duration::from_secs(3));
+        if let Some(root) = steam_root() {
+            seen.extend(steam_active(&root, &mut self.steam));
+        }
+        if self.qbt_running {
+            if self.torrents_at.elapsed() > Duration::from_secs(20) {
+                if let Some(dir) = std::env::var_os("LOCALAPPDATA").map(|p| PathBuf::from(p).join("qBittorrent").join("BT_backup")) {
+                    refresh_torrents(&dir, &mut self.torrents);
+                }
+                self.torrents_at = now;
+            }
+            self.qbt.sample(QBT_MIN_RATE);
+            seen.extend(torrents_active(&self.torrents, &mut self.torrent_track, self.qbt.rate));
+        }
+
+        let mut observed: Vec<Value> = Vec::new();
+        for o in seen {
+            self.tracked.insert(o.id.clone(), Tracked { kind: o.kind, meta: o.meta, open_path: o.open_path, seen: now });
+            observed.push(json!({ "id": o.id, "source": o.source, "kind": o.kind, "name": o.name, "received": o.received, "total": o.total, "speed": o.speed }));
+        }
+        // downloads that stopped showing up: finished, or given up
+        let mut ended: Vec<Value> = Vec::new();
+        let mut done: Vec<String> = Vec::new();
+        for (id, t) in self.tracked.iter() {
+            let gone = now.duration_since(t.seen).as_secs_f64();
+            if gone < GONE_S {
                 continue;
             }
-            if open_hub && demo_start.elapsed().as_secs() == 3 && !ctx.state.hub_open.load(Ordering::Relaxed) {
-                ctx.state.hub_open.store(true, Ordering::Relaxed);
-                ctx.state.shown.store(true, Ordering::Relaxed);
+            if let Some(path) = finished(t, id) {
+                ended.push(json!({ "id": id, "finished": true, "path": path }));
+                done.push(id.clone());
+            } else if gone >= DROP_S {
+                ended.push(json!({ "id": id, "finished": false }));
+                done.push(id.clone());
             }
-            let dirs: Vec<PathBuf> = downloads_dir().into_iter().collect();
-            let tracked_browser = list.lock().unwrap().iter().any(|i| i.kind == "browser" && !i.done);
-
-            let mut seen: Vec<Obs> = Vec::new();
-            seen.extend(chromium_active(&dirs, tracked_browser));
-            seen.extend(firefox_active(&dirs));
-            if qbt_checked.elapsed() > Duration::from_secs(10) {
-                qbt_running = qbittorrent_running(&mut sys);
-                steam_meter.io.pid = process_pid(&sys, "steam.exe");
-                qbt_meter.pid = process_pid(&sys, "qbittorrent.exe");
-                qbt_checked = Instant::now();
-            }
-            if let Some(root) = steam_root() {
-                seen.extend(steam_active(&root, &mut steam_meter));
-            }
-            if qbt_running {
-                if torrents_at.elapsed() > Duration::from_secs(20) {
-                    if let Some(dir) = &bt_dir {
-                        refresh_torrents(dir, &mut torrents);
-                    }
-                    torrents_at = Instant::now();
-                }
-                qbt_meter.sample(QBT_MIN_RATE);
-                seen.extend(torrents_active(&torrents, &mut torrent_track, qbt_meter.rate));
-            }
-            if demo {
-                let t = demo_start.elapsed().as_secs_f64();
-                for (i, (name, total)) in [("Neverness to Everness", 24_000_000_000u64), ("Deep Rock Galactic", 3_100_000_000), ("Hades II", 9_800_000_000), ("Balatro", 90_000_000)].iter().enumerate() {
-                    seen.push(Obs {
-                        id: format!("steam:demo{i}"),
-                        source: "Steam".into(),
-                        kind: "steam",
-                        name: name.to_string(),
-                        received: ((t * (20_000_000.0 + i as f64 * 5_000_000.0)) as u64).min(*total - 1),
-                        total: Some(*total),
-                        exe_path: None,
-                        open_path: None,
-                        meta: String::new(),
-                        speed: None,
-                    });
-                }
-                seen.push(Obs {
-                    id: "demo:chrome".into(),
-                    source: "Chrome".into(),
-                    kind: "browser",
-                    name: "installer-x64.exe".into(),
-                    received: (t * 4_000_000.0) as u64,
-                    total: None,
-                    exe_path: None,
-                    open_path: None,
-                    meta: "demo".into(),
-                    speed: None,
-                });
-                if t > 3.0 && !ctx.state.hub_open.load(Ordering::Relaxed) && t < 4.0 {
-                    // demo mode also opens the hub, so the cards can be looked at
-                    ctx.state.hub_open.store(true, Ordering::Relaxed);
-                    ctx.state.shown.store(true, Ordering::Relaxed);
-                }
-                let mut items = list.lock().unwrap();
-                if t > 8.0 && !items.iter().any(|i| i.id == "demo:done") {
-                    let now = Instant::now();
-                    items.push(DownloadItem {
-                        id: "demo:done".into(), source: "Chrome".into(), kind: "browser".into(), name: "report-final.pdf".into(),
-                        received: 1, total: Some(1), speed: 0.0, done: true, exe_path: None, icon: None, open_path: None, meta: String::new(),
-                        last_bytes: 0, last_at: now, seen: now, started: now, moved: now,
-                    });
-                }
-                merge(&mut items, seen);
-                continue;
-            }
-            merge(&mut list.lock().unwrap(), seen);
         }
-    });
-}
-
-/// The list as one hub card: active downloads first (oldest first), finished ones after.
-pub fn cards(items: &[DownloadItem]) -> Vec<DownloadCard> {
-    if items.is_empty() {
-        return Vec::new();
-    }
-    let mut all: Vec<DownloadItem> = items.to_vec();
-    for i in all.iter_mut() {
-        i.icon = i.exe_path.as_deref().and_then(|p| crate::exeinfo::lookup(p).icon);
-    }
-    all.sort_by_key(|i| (i.done, i.started));
-    vec![DownloadCard { speed: all.iter().filter(|i| !i.done).map(|i| i.speed).sum(), items: all }]
-}
-
-/// A click on a finished download: a browser one also opens its folder (with the
-/// file selected); every finished one is dismissed. Active ones are left alone.
-fn click(list: &Mutex<Vec<DownloadItem>>, id: &str) -> bool {
-    let mut items = list.lock().unwrap();
-    let Some(pos) = items.iter().position(|i| i.id == id && i.done) else { return false };
-    let item = items.remove(pos);
-    if item.kind == "browser" {
-        if let Some(path) = item.open_path {
-            let _ = std::process::Command::new("explorer.exe")
-                .raw_arg(format!("/select,\"{path}\""))
-                .creation_flags(0x0800_0000)
-                .spawn();
+        for id in done {
+            self.tracked.remove(&id);
         }
-    }
-    true
-}
-
-#[derive(Default)]
-pub struct Downloads {
-    items: Arc<Mutex<Vec<DownloadItem>>>,
-}
-
-impl Native for Downloads {
-    fn manifest(&self) -> Manifest {
-        manifest()
-    }
-
-    fn start(&self, ctx: &Ctx) {
-        run(ctx.clone(), self.items.clone());
-    }
-
-    fn switched(&self, _ctx: &Ctx, on: bool) {
-        if !on {
-            self.items.lock().unwrap().clear();
-        }
-    }
-
-    fn cards(&self, _ctx: &Ctx) -> Option<Value> {
-        Some(serde_json::to_value(cards(&self.items.lock().unwrap())).unwrap_or(json!([])))
-    }
-
-    fn call(&self, _ctx: &Ctx, cmd: &str, args: &Value) -> Result<Value, String> {
-        match cmd {
-            "click" => Ok(json!(click(&self.items, args.get("id").and_then(|v| v.as_str()).unwrap_or("")))),
-            _ => Err(format!("no such call: {cmd}")),
-        }
-    }
-
-    fn adopt(&self, old: &Value, default_on: bool) -> Adopted {
-        adopted(old, default_on)
+        json!({ "observed": observed, "ended": ended })
     }
 }
 
@@ -1071,31 +790,19 @@ mod tests {
     }
 
     #[test]
-    fn all_downloads_share_one_card() {
-        let mk = |id: &str, src: &str, done: bool| DownloadItem {
-            id: id.into(),
-            source: src.into(),
-            kind: "steam".into(),
-            name: id.into(),
-            received: 0,
-            total: None,
-            speed: 10.0,
-            done,
-            exe_path: None,
-            icon: None,
-            open_path: None,
-            meta: String::new(),
-            last_bytes: 0,
-            last_at: Instant::now(),
-            seen: Instant::now(),
-            started: Instant::now(),
-            moved: Instant::now(),
-        };
-        let items = vec![mk("a", "Steam", true), mk("b", "Steam", false), mk("c", "Chrome", false), mk("d", "qBittorrent", false), mk("e", "Steam", false)];
-        let cards = cards(&items);
-        assert_eq!(cards.len(), 1);
-        assert_eq!(cards[0].items.len(), 5);
-        assert!(cards[0].items.last().unwrap().done); // finished ones sink to the bottom
-        assert_eq!(cards[0].speed, 40.0);
+    fn a_firefox_download_is_done_when_its_file_is_there_and_its_part_is_gone() {
+        let dir = std::env::temp_dir().join(format!("nadi-dl-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("a.zip");
+        let part = dir.join("a.zip.part");
+        let t = Tracked { kind: "browser", meta: "firefox".into(), open_path: Some(file.to_string_lossy().to_string()), seen: Instant::now() };
+        let id = format!("firefox:{}", part.to_string_lossy());
+        assert_eq!(finished(&t, &id), None);
+        std::fs::write(&file, b"x").unwrap();
+        std::fs::write(&part, b"x").unwrap();
+        assert_eq!(finished(&t, &id), None); // (still being written)
+        std::fs::remove_file(&part).unwrap();
+        assert_eq!(finished(&t, &id), Some(Some(file.to_string_lossy().to_string())));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

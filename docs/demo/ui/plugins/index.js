@@ -1,11 +1,6 @@
-// The faces of the native plugins that draw more than the blocks can (the plugin itself is in src/builtin): each file draws one
-// plugin's cards and pill. A plugin that is switched off sends nothing, so its file has nothing to draw. Every other plugin
-// (a module, a declarative plugin) is drawn by ../pluginui.js, from its data.
-import claude from "./claude-code.js";
-import downloads from "./downloads.js";
-import games from "./games.js";
-import pageReader from "./page-reader.js";
+// What the island draws besides the cards of plugins: the faces they bring (a script in a frame) and the widgets and panes modules
+// bring. The cards, the pills and the rings are drawn by ../pluginui.js, from the data a plugin hands the island.
 import faces from "../faces.js";
 import surface from "./surface.js";
 
-export const plugins = [claude, games, downloads, pageReader, faces, surface];
+export const plugins = [faces, surface];

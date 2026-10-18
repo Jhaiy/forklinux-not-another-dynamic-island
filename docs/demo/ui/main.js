@@ -5,13 +5,18 @@
 
 import { initFloats } from "./floats.js";
 import { head } from "./head.js";
+import { initRestEditor, render as renderRest } from "./restedit.js";
+import { initTiles, update as updateTiles } from "./tiles.js";
+import { initTilesEditor, setHubWidth as setTilesHubWidth } from "./tilesedit.js";
 import { initPluginUi, pluginCard, setRings, whenText } from "./pluginui.js";
 import { plugins } from "./plugins/index.js";
 import { addFromGitHub, askMoved } from "./repo.js";
 import { frame as facesFrame, event as faceEvent, setCursor as faceCursor } from "./faces.js";
+import { initRest } from "./rest.js";
 import { updateAudio } from "./sound.js";
 import {
 	FLOATS,
+	SETTINGS,
 	LLM_COLOR,
 	LLM_LETTER,
 	LLM_RING_C,
@@ -31,6 +36,7 @@ import {
 } from "./kit.js";
 
 if (FLOATS) document.documentElement.classList.add("floats");
+if (SETTINGS) document.documentElement.classList.add("settings");
 
 // ---- the island is not a web page: nothing of the browser should work on it ----
 // (the webview's own accelerators, devtools, zoom and menus are switched off in Rust; this covers
@@ -47,7 +53,8 @@ window.addEventListener(
 		const block =
 			BLOCKED_KEYS.test(e.key) ||
 			((e.ctrlKey || e.metaKey) &&
-				BLOCKED_CTRL.test(e.key)) ||
+				BLOCKED_CTRL.test(e.key) &&
+				!(SETTINGS && /^f$/i.test(e.key))) ||
 			(e.ctrlKey &&
 				e.shiftKey &&
 				/^[ijcnrdtw]$/i.test(e.key)) ||
@@ -150,7 +157,7 @@ function frame(now) {
 	}
 	requestAnimationFrame(frame);
 }
-if (!FLOATS) requestAnimationFrame(frame);
+if (!FLOATS && !SETTINGS) requestAnimationFrame(frame);
 
 listen("view-tick", (event) => {
 	currentView = event.payload;
@@ -164,13 +171,14 @@ listen("view-tick", (event) => {
 	briefEl.classList.toggle("hidden", currentView !== "brief");
 	hubEl.classList.toggle("hidden", currentView !== "hub");
 	pill.dataset.view = currentView;
-	// only what happened by itself glows (a notification banner, a session pill): calling the
-	// island by hovering the edge, or a media / game / work view that settles in, does not
+	// only what came by itself glows (a banner, a pill that says something): calling the island by hovering the
+	// edge, or a media / game / work view that settles in, does not
 	document.body.dataset.view = currentView;
 	document.body.classList.remove("glow");
 	if (
 		currentView === "notification" ||
-		currentView === "brief"
+		currentView === "brief" ||
+		pills.get(currentView)?.dataset.brief === "1"
 	) {
 		void document.body.offsetWidth;
 		document.body.classList.add("glow");
@@ -183,9 +191,7 @@ listen("view-tick", (event) => {
 	if (enterTarget) playEnter(enterTarget);
 	if (currentView === "hub") {
 		faceEvent("hub-open");
-		// left-click opens the info pane; the tray's Settings item asks for settings
-		setHubPane(pendingSettingsPane ? "settings" : "info");
-		pendingSettingsPane = false;
+		setHubPane("info");
 		playHubEntrance(document.getElementById("hub-head"));
 		loadSettingsIntoForm();
 		loadNotificationHistory();
@@ -307,10 +313,7 @@ listen("cursor-tick", (event) => {
 
 // -- drag to move (native OS move, not a JS-computed one -- cheaper and
 // matches exactly how the window manager drags any other window) --
-// settings live behind the tray menu's "Settings" item so they aren't always
-// on screen (Rust emits "open-settings", then opens the hub if it was closed).
-// Left-click opens the hub on the info pane.
-let pendingSettingsPane = false;
+// the settings are a window of their own (the tray menu's "Settings" item, see settingswin.rs); left-click opens the hub.
 const paneSettings = document.getElementById("pane-settings");
 const paneInfo = document.getElementById("pane-info");
 const hubBody = document.getElementById("hub-body");
@@ -360,14 +363,11 @@ function reportHubHeight() {
 		}
 	};
 	visit(pane);
-	// (edit mode has no cards: only the head, the tray and the foot are measured)
-	const pb = head.isEditing()
-		? 0
-		: parseFloat(getComputedStyle(hubBody).paddingBottom);
+	const pb = parseFloat(getComputedStyle(hubBody).paddingBottom);
 	const h = Math.ceil(hubHeadEl.scrollHeight + bottom + pb + hubFootEl.offsetHeight);
 	if (Math.abs(h - hubHeightSent) < 2) return;
 	hubHeightSent = h;
-	invoke("set_hub_height", { h, edit: head.isEditing() });
+	invoke("set_hub_height", { h });
 }
 function scheduleHubHeight() {
 	if (!hubHeightRaf)
@@ -401,9 +401,11 @@ function playHubEntrance(container) {
 // their rows, and what the hub's panes do: show one by name (a plugin's page is a pane too)
 host.setPane = (pane) => setHubPane(pane);
 host.pane = () => currentPane;
-if (!FLOATS) {
+if (!FLOATS && !SETTINGS) {
 	head.mount(document.getElementById("hub-head"), document.getElementById("hub-foot"));
 	head.init();
+	initRest();
+	initTiles();
 }
 
 // nothing is on: the cards say what this is, and where to start
@@ -414,10 +416,7 @@ function updateBlank() {
 	scheduleHubHeight();
 }
 head.onEnabled(updateBlank);
-document.getElementById("blank-go").addEventListener("click", () => {
-	setHubPane("settings");
-	showSettingsTab("plugins");
-});
+document.getElementById("blank-go").addEventListener("click", () => invoke("open_settings", { page: "plugins" }));
 document.getElementById("blank-go").addEventListener("mousedown", (e) => e.stopPropagation());
 
 // cursor spotlight: every .spot card gets the cursor position (relative to
@@ -451,10 +450,6 @@ hubRoot.addEventListener("mouseleave", () => {
 	hubRoot.classList.remove("spot-on");
 });
 
-listen("open-settings", () => {
-	if (currentView === "hub") setHubPane("settings");
-	else pendingSettingsPane = true;
-});
 
 // no native webview context menu on the island
 // right-click pins the island in place (no hiding, no following the cursor to
@@ -585,8 +580,21 @@ function showBrief(n) {
 	briefEl.classList.toggle("brief-plugin", plugin);
 	if (plugin) {
 		briefTile.removeAttribute("style");
-		briefTile.className = "pg-tile";
-		briefTile.innerHTML = li(b.host_icon || "dot");
+		if (b.tile) {
+			// a letter in a colour, with a ring (how full something is)
+			briefTile.className = "llm-tile";
+			briefTile.style.setProperty("--c", b.tile.color);
+			briefTile.innerHTML = `<span></span><svg class="cr" viewBox="0 0 40 40"><circle class="rb" cx="20" cy="20" r="18"/><circle class="rf" cx="20" cy="20" r="18"/></svg>`;
+			briefTile.firstChild.textContent = b.tile.text;
+			const rf = briefTile.querySelector(".rf");
+			rf.style.strokeDasharray = String(LLM_RING_C);
+			rf.style.strokeDashoffset = String(LLM_RING_C * (1 - (b.tile.ring ?? 0)));
+			rf.style.stroke = b.tile.ring_color;
+			rf.parentElement.style.display = b.tile.ring == null ? "none" : "";
+		} else {
+			briefTile.className = "pg-tile";
+			briefTile.innerHTML = li(b.host_icon || "dot");
+		}
 		const clock = big ? /^(\d+):(\d+)(?:\s*(AM|PM))?$/i.exec(n.title) : null;
 		if (clock) {
 			// the time: big light digits glowing in the theme colour, a blinking colon, nothing else
@@ -595,8 +603,21 @@ function showBrief(n) {
 		} else {
 			briefTitle.textContent = whenText(n.title);
 		}
-		briefRight.replaceChildren(el("span", "pg-right", whenText(b.project || "")));
-		briefRight.classList.toggle("hidden", !b.project);
+		if (b.badges?.length || b.tone) {
+			briefRight.replaceChildren(
+				...b.badges.map((x) => {
+					const host = el("span", "llm-host");
+					host.innerHTML = li(x.icon);
+					host.dataset.tip = x.tip;
+					return host;
+				}),
+			);
+			if (b.tone) briefRight.append(llmStateIcon(b.tone));
+			briefRight.classList.remove("hidden");
+		} else {
+			briefRight.replaceChildren(el("span", "pg-right", whenText(b.project || "")));
+			briefRight.classList.toggle("hidden", !b.project);
+		}
 	} else {
 		briefTile.className = "llm-tile";
 		briefRight.classList.remove("hidden");
@@ -611,7 +632,7 @@ function showBrief(n) {
 		host.innerHTML = li(b.host_icon);
 		briefRight.replaceChildren(host, llmStateIcon(b.state));
 	}
-	document.body.dataset.brief = b.state;
+	document.body.dataset.brief = plugin ? b.tone || "plugin" : b.state;
 	// already a brief on screen (the queue moved on): the glow and the entrance start again
 	if (currentView === "brief") {
 		document.body.classList.remove("glow");
@@ -626,7 +647,9 @@ briefEl.addEventListener("mousedown", (e) =>
 briefEl.addEventListener("click", () => {
 	if (!briefCurrent) return;
 	if (briefCurrent.state === "plugin") {
-		invoke("open_notification_action", { action: "brief" }); // just closes it
+		// (what pressing it asks of the plugin: go to the session, and put the card away)
+		if (briefCurrent.press) call(briefCurrent.plugin, briefCurrent.press).catch(() => {});
+		invoke("open_notification_action", { action: "brief" }); // closes it
 		return;
 	}
 	invoke("focus_source", {
@@ -840,7 +863,7 @@ const hubEl = document.getElementById("hub");
 (function decorate() {
 	for (const b of document.querySelectorAll(".hub-btn-x"))
 		b.innerHTML = li("x");
-	document.getElementById("plugin-add").innerHTML = li("plus");
+	document.getElementById("plugin-add").innerHTML = `${li("plus")}<span>Add from GitHub</span>`;
 	document.getElementById("plugin-folder").innerHTML = li("folder");
 	document.getElementById("plugin-rescan").innerHTML = li("refresh");
 })();
@@ -972,6 +995,9 @@ for (const b of setFullscreenGuard.querySelectorAll("button"))
 const edgeDwellText = (ms) =>
 	Number(ms) === 0 ? "off" : `${ms} ms`;
 const setGlow = document.getElementById("set-glow");
+const setRCard = document.getElementById("set-r-card");
+const setRHub = document.getElementById("set-r-hub");
+const setRRest = document.getElementById("set-r-rest");
 const setGlowLabel = document.getElementById("set-glow-label");
 const setBgDim = document.getElementById("set-bg-dim");
 const setBgDimLabel = document.getElementById(
@@ -994,6 +1020,10 @@ async function loadSettingsIntoForm() {
 	setCompactWidthLabel.textContent = `${setCompactWidth.value}px`;
 	setHubWidth.value = currentSettings.hub_width ?? 420;
 	setHubWidthLabel.textContent = `${setHubWidth.value}px`;
+	if (SETTINGS) {
+		document.getElementById("ex-stage").style.width = `${setHubWidth.value}px`;
+		setTilesHubWidth(Number(setHubWidth.value));
+	}
 	setTopMargin.value = currentSettings.top_margin ?? 4;
 	setTopMarginLabel.textContent = `${setTopMargin.value}px`;
 	setPinShrink.value = currentSettings.pin_shrink ?? 75;
@@ -1016,6 +1046,10 @@ async function loadSettingsIntoForm() {
 	setGlow.value = currentSettings.glow_intensity ?? 70;
 	setGlowLabel.textContent = `${setGlow.value}%`;
 	applyGlow(Number(setGlow.value));
+	setRCard.value = currentSettings.card_radius ?? 18;
+	setRHub.value = currentSettings.hub_radius ?? 28;
+	setRRest.value = currentSettings.rest_radius ?? 20;
+	showRadii();
 	setBgDim.value = currentSettings.bg_dim;
 	setBgDimLabel.textContent = `${currentSettings.bg_dim}%`;
 	applyBackgrounds(currentSettings);
@@ -1090,9 +1124,11 @@ function saveSettingsFromForm() {
 		top_margin: Number(setTopMargin.value),
 		bg_dim: Number(setBgDim.value),
 		glow_intensity: Number(setGlow.value),
+		card_radius: Number(setRCard.value),
+		hub_radius: Number(setRHub.value),
+		rest_radius: Number(setRRest.value),
 	};
 	currentSettings.accent_color = accentColor;
-	updateClock();
 	invoke("save_settings", { settings: currentSettings });
 }
 
@@ -1119,83 +1155,193 @@ setCompactWidth.addEventListener(
 );
 setHubWidth.addEventListener("input", () => {
 	setHubWidthLabel.textContent = `${setHubWidth.value}px`;
+	if (SETTINGS) {
+		document.getElementById("ex-stage").style.width = `${setHubWidth.value}px`;
+		setTilesHubWidth(Number(setHubWidth.value));
+	}
 });
 setHubWidth.addEventListener("change", saveSettingsFromForm);
 setTopMargin.addEventListener("input", () => {
 	setTopMarginLabel.textContent = `${setTopMargin.value}px`;
 });
 setTopMargin.addEventListener("change", saveSettingsFromForm);
-// ---- the settings tabs: four, each with its name ----
-const SET_TABS = [
-	{ id: "general", icon: "sliders", tip: "General" },
-	{ id: "size", icon: "expand", tip: "Size" },
-	{ id: "look", icon: "palette", tip: "Look" },
-	{ id: "plugins", icon: "plug", tip: "Plugins" },
+// ---- the settings window: a sidebar of pages, and a search over the settings on them ----
+const SET_PAGES = [
+	{ id: "general", icon: "sliders", name: "General", sub: "How the island starts, and when it shows." },
+	{ id: "resting", icon: "pillshape", name: "Resting Island", sub: "What the island shows while nothing else is going on." },
+	{ id: "expanded", icon: "steps", name: "Expanded Island", sub: "The widgets at the top and the bottom of the open island." },
+	{ id: "size", icon: "island", name: "Size", sub: "How big the island is, and where it sits." },
+	{ id: "look", icon: "palette", name: "Look", sub: "The color, the glow and the backgrounds." },
+	{ id: "plugins", icon: "plug", name: "Plugins", sub: "" },
+	{ id: "about", icon: "info", name: "About", sub: "" },
 ];
+const paneSettingsEl = document.getElementById("pane-settings");
+const findEl = document.getElementById("set-find");
+const resultsEl = document.getElementById("set-results");
+
 function showSettingsTab(id) {
+	if (!SET_PAGES.some((t) => t.id === id)) id = "general";
 	if (id === "plugins") renderPlugins();
 	if (id === "size") updateSizePreview();
-	for (const p of document.querySelectorAll(
-		"#pane-settings .set-tab",
-	))
+	findEl.value = "";
+	showResults("");
+	if (id === "resting") renderRest();
+	if (id === "expanded") showExpanded();
+	for (const p of document.querySelectorAll("#pane-settings .set-tab"))
 		p.classList.toggle("hidden", p.dataset.tab !== id);
-	for (const b of document.querySelectorAll(
-		"#set-tabs button",
-	)) {
+	for (const b of document.querySelectorAll("#set-nav button")) {
 		b.classList.toggle("on", b.dataset.tab === id);
-		b.setAttribute(
-			"aria-selected",
-			String(b.dataset.tab === id),
-		);
+		b.setAttribute("aria-selected", String(b.dataset.tab === id));
 	}
+	paneSettingsEl.scrollTop = 0;
 	try {
 		localStorage.setItem("nadi.settingsTab", id);
 	} catch (_) {}
-	scheduleHubHeight();
 }
+
+// ---- the expanded island's editor: head.js on stand-ins for the widgets the island posted (see head.rs) ----
+let expandedStarted = false;
+let tilesStarted = false;
+/** the two views of the page: the head and the foot (head.js), and the tiles (tilesedit.js) */
+function showExpandedView(view) {
+	for (const b of document.querySelectorAll(".te-seg-top button")) {
+		b.classList.toggle("on", b.dataset.view === view);
+		b.setAttribute("aria-selected", String(b.dataset.view === view));
+	}
+	document.getElementById("ex-headview").classList.toggle("hidden", view !== "head");
+	document.getElementById("ex-cards").classList.toggle("hidden", view !== "cards");
+	if (view === "cards" && !tilesStarted) {
+		tilesStarted = true;
+		initTilesEditor(document.getElementById("ex-cards"));
+	}
+	setTilesHubWidth(Number(setHubWidth.value) || 420);
+	try {
+		localStorage.setItem("nadi.expandedView", view);
+	} catch (_) {}
+}
+for (const b of document.querySelectorAll(".te-seg-top button")) b.addEventListener("click", () => showExpandedView(b.dataset.view));
+
+function showExpanded() {
+	let view = "head";
+	try {
+		view = localStorage.getItem("nadi.expandedView") || "head";
+	} catch (_) {}
+	showExpandedView(view);
+	const stage = document.getElementById("ex-stage");
+	// (the rows are as wide as the island's: what fits here is what fits there)
+	stage.style.width = `${Number(setHubWidth.value) || 420}px`;
+	if (expandedStarted) return;
+	expandedStarted = true;
+	head.mount(document.getElementById("ex-head"), document.getElementById("ex-foot"), { stage, tray: document.getElementById("ex-tray"), bar: document.getElementById("ex-bar") });
+	head.initEditor();
+}
+
+// what the search looks through: each row of a page, by its words (and the words of its tooltip)
+let findIndex = null;
+function buildFindIndex() {
+	findIndex = [];
+	for (const pg of SET_PAGES) {
+		const tab = document.querySelector(`.set-tab[data-tab="${pg.id}"]`);
+		for (const row of tab.querySelectorAll(".set-row")) {
+			const lab = row.querySelector(".set-lab");
+			if (!lab) continue;
+			const title = row.closest(".set-card")?.previousElementSibling;
+			const group = title?.classList.contains("set-title") ? title.textContent.trim() : "";
+			const tipText = lab.dataset.help || "";
+			const name = lab.dataset.name || lab.textContent.trim();
+			findIndex.push({ page: pg, row, label: name, group, tip: tipText, hay: `${name} ${tipText} ${group} ${pg.name}`.toLowerCase() });
+		}
+	}
+}
+const escapeHtml = (t) => t.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+function marked(text, words) {
+	let out = escapeHtml(text);
+	for (const w of words) out = out.replace(new RegExp(`(${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")})`, "ig"), "<mark>$1</mark>");
+	return out;
+}
+function showResults(query) {
+	const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+	paneSettingsEl.classList.toggle("searching", words.length > 0);
+	resultsEl.classList.toggle("hidden", !words.length);
+	if (!words.length) return;
+	if (!findIndex) buildFindIndex();
+	const hits = findIndex.filter((x) => words.every((w) => x.hay.includes(w)));
+	resultsEl.replaceChildren();
+	if (!hits.length) {
+		resultsEl.append(el("div", "set-nores", `Nothing for “${query.trim()}”.`));
+		return;
+	}
+	let last = "";
+	for (const h of hits) {
+		const where = h.group ? `${h.page.name} › ${h.group}` : h.page.name;
+		if (where !== last) resultsEl.append(el("div", "set-title", where));
+		last = where;
+		const b = el("button", "set-res");
+		b.type = "button";
+		b.setAttribute("role", "listitem");
+		const t = el("span", "set-res-t");
+		t.innerHTML = marked(h.label, words);
+		b.append(t);
+		if (h.tip) b.append(el("span", "set-res-s", h.tip));
+		b.addEventListener("click", () => {
+			showSettingsTab(h.page.id);
+			h.row.scrollIntoView({ block: "center" });
+			h.row.classList.add("flash");
+			setTimeout(() => h.row.classList.remove("flash"), 1500);
+		});
+		resultsEl.append(b);
+	}
+}
+findEl.addEventListener("input", () => showResults(findEl.value));
 {
-	const bar = document.getElementById("set-tabs");
-	for (const t of SET_TABS) {
+	const nav = document.getElementById("set-nav");
+	for (const t of SET_PAGES) {
 		const b = document.createElement("button");
 		b.type = "button";
 		b.dataset.tab = t.id;
 		b.setAttribute("role", "tab");
-		b.innerHTML = `${li(t.icon)}<span>${t.tip}</span>`;
-		b.addEventListener("mousedown", (e) =>
-			e.stopPropagation(),
-		);
-		b.addEventListener("click", () =>
-			showSettingsTab(t.id),
-		);
-		bar.append(b);
+		b.innerHTML = `${li(t.icon)}<span>${t.name}</span>`;
+		b.setAttribute("aria-label", t.name);
+		if (t.id === "about") b.classList.add("last");
+		b.addEventListener("click", () => showSettingsTab(t.id));
+		nav.append(b);
+		// each page starts with its name and a line about it
+		const tab = document.querySelector(`.set-tab[data-tab="${t.id}"]`);
+		const head = el("div", "set-head");
+		const words = el("div", "set-head-t");
+		const h1 = el("h1", null, t.name);
+		if (t.id === "plugins") h1.append(el("span", "set-count", "")); // (renderPlugins says how many)
+		words.append(h1);
+		if (t.sub) words.append(el("div", "set-sub", t.sub));
+		head.append(words);
+		if (t.id === "plugins") head.append(tab.querySelector(".set-tools"));
+		tab.prepend(head);
 	}
-	let first = "general";
-	try {
-		const saved = localStorage.getItem("nadi.settingsTab");
-		if (SET_TABS.some((t) => t.id === saved)) first = saved;
-	} catch (_) {}
-	showSettingsTab(first);
-	// the pencil arranges the head and the foot (it closes the settings, as the cards are what is arranged around); the cross
-	// closes them (the settings page has no button to it in the head: the tray opens it)
-	const edit = document.createElement("button");
-	edit.type = "button";
-	edit.id = "head-edit";
-	edit.className = "set-edit";
-	edit.setAttribute("aria-label", "Arrange the widgets");
-	edit.dataset.tip = "Arrange the widgets";
-	edit.innerHTML = li("pen");
-	edit.addEventListener("mousedown", (e) => e.stopPropagation());
-	edit.addEventListener("click", () => head.startEdit());
-	bar.append(edit);
-	const close = document.createElement("button");
-	close.type = "button";
-	close.className = "set-close";
-	close.setAttribute("aria-label", "Close the settings");
-	close.dataset.tip = "Back to the cards";
-	close.innerHTML = li("x");
-	close.addEventListener("mousedown", (e) => e.stopPropagation());
-	close.addEventListener("click", () => setHubPane("info"));
-	bar.append(close);
+	// a label's tooltip is the line under it, here
+	for (const lab of document.querySelectorAll("#pane-settings .set-lab")) {
+		lab.dataset.name = lab.textContent.trim();
+		const help = lab.dataset.tip || "";
+		if (!help) continue;
+		lab.dataset.help = help;
+		lab.classList.remove("tipped");
+		lab.removeAttribute("data-tip");
+		lab.append(el("small", null, help));
+	}
+	document.getElementById("set-find-ico").innerHTML = li("search");
+	document.getElementById("set-bar-tile").innerHTML = li("gear");
+	document.getElementById("set-min").innerHTML = li("minus");
+	document.getElementById("set-close").innerHTML = li("x");
+	document.getElementById("set-min").addEventListener("click", () => invoke("settings_window", { action: "minimize" }));
+	document.getElementById("set-close").addEventListener("click", () => invoke("settings_window", { action: "close" }));
+	const maxBtn = document.getElementById("set-max");
+	const showMax = (on) => {
+		maxBtn.innerHTML = li(on ? "restore" : "maximize");
+		maxBtn.setAttribute("aria-label", on ? "Restore" : "Maximize");
+	};
+	showMax(false);
+	maxBtn.addEventListener("click", () => invoke("settings_window", { action: "maximize" }));
+	listen("settings-maximized", (e) => showMax(!!e.payload));
+	invoke("settings_window", { action: "state" }).then((on) => showMax(!!on)).catch(() => {});
 }
 setPinShrink.addEventListener("input", () => {
 	setPinShrinkLabel.textContent = pinShrinkText(
@@ -1216,6 +1362,24 @@ setPeekDuration.addEventListener(
 	"change",
 	saveSettingsFromForm,
 );
+// how round things are: three numbers (settings > Look > Corners); the top of the resting island's is "full"
+const FULL = 40;
+function showRadii() {
+	const root = document.documentElement.style;
+	root.setProperty("--r-card", `${setRCard.value}px`);
+	root.setProperty("--r-hub", `${setRHub.value}px`);
+	root.setProperty("--r-rest", Number(setRRest.value) >= FULL ? "999px" : `${setRRest.value}px`);
+	setRCardLabel.textContent = `${setRCard.value} px`;
+	setRHubLabel.textContent = Number(setRHub.value) >= FULL ? "Full" : `${setRHub.value} px`;
+	setRRestLabel.textContent = Number(setRRest.value) >= FULL ? "Full" : `${setRRest.value} px`;
+}
+const setRCardLabel = document.getElementById("set-r-card-label");
+const setRHubLabel = document.getElementById("set-r-hub-label");
+const setRRestLabel = document.getElementById("set-r-rest-label");
+for (const slider of [setRCard, setRHub, setRRest]) {
+	slider.addEventListener("input", showRadii);
+	slider.addEventListener("change", saveSettingsFromForm);
+}
 function applyGlow(pct) {
 	document.documentElement.style.setProperty(
 		"--gi",
@@ -1282,6 +1446,7 @@ function bgLabel(path) {
 function setBgLayer(layer, path) {
 	if (layer.path === path) return;
 	layer.path = path;
+	if (SETTINGS) return; // (the settings window shows no island)
 	layer.el.textContent = "";
 	layer.media = null;
 	if (!path) return;
@@ -1415,7 +1580,6 @@ for (const row of document.querySelectorAll(".hub-row")) {
 
 // -- hub "Now" section: one media card per live session (live, from media-tick) + game / work /
 // coding cards (polled from Rust while the hub is showing the info pane) --
-const nowCardsEl = document.getElementById("now-cards");
 let hubHasActivity = false;
 // (an empty list just stays empty -- no placeholder text; callers still call this)
 function updateInfoEmpty() {}
@@ -1477,8 +1641,16 @@ function confirmInline(p, item) {
 	});
 }
 
-// a permission as a badge reads it: what, and (when there is one) of what
+// a permission as a line reads it: what, and (when there is one) of what
 const permName = (x) => (x.detail ? `${x.name} · ${x.detail}` : x.name);
+
+// a name in Title Case ("read files and folders" -> "Read Files and Folders"; what is capitalized already stays)
+const SMALL_WORDS = new Set(["a", "an", "and", "as", "at", "by", "for", "in", "of", "on", "or", "the", "to", "with"]);
+const titleCase = (text) =>
+	text
+		.split(" ")
+		.map((w, i) => (i > 0 && SMALL_WORDS.has(w) ? w : w.charAt(0).toUpperCase() + w.slice(1)))
+		.join(" ");
 
 // a plugin's tile: its first letter, in a colour its id picks
 const PLUGIN_TINTS = ["#7fd1a0", "#8fb6f0", "#e6b070", "#b79af0", "#7fd1d1", "#d98fa8", "#c9c9d0"];
@@ -1487,28 +1659,25 @@ function tintOf(id) {
 	for (const c of id) h = (h * 31 + c.charCodeAt(0)) >>> 0;
 	return PLUGIN_TINTS[h % PLUGIN_TINTS.length];
 }
-// the plugins whose row is open stay open when the list is drawn again
-const openPlugins = new Set();
+// the plugin whose page is open at the right of the list
+let selectedPlugin = "";
 
-// one plugin: a row (its name, one line about it, its switch) that opens to its settings and what it can see
-function pluginItem(p, reload) {
-	const item = el("div", `pl${p.enabled ? "" : " off"}`);
+// one plugin of the list: a row (its name, one line about it, its switch); pressing it opens its page (`pluginDetail`)
+function pluginRow(p, reload, onSelect) {
+	const item = el("div", `pl${p.enabled ? "" : " off"}${p.id === selectedPlugin ? " sel" : ""}`);
 	const row = el("div", "prow");
-	const open = openPlugins.has(p.id);
 	const main = el("button", "pmain");
 	main.type = "button";
-	main.setAttribute("aria-expanded", String(open));
 	const tile = el("span", "tile", (p.name || "?").trim().charAt(0).toUpperCase());
 	tile.style.background = tintOf(p.id);
 	const text = el("span", "ptext");
 	const name = el("span", "pname", p.name);
-	if (!p.bundled) name.append(el("span", "pg-tag", p.kind));
+	name.append(el("span", "pg-tag", p.kind));
 	// one line: what is wrong, else what it says of itself, else what it is
 	const line = p.error || p.note || p.description || "";
 	text.append(name, el("span", `pdesc${p.error ? " pg-err" : ""}`, line));
-	const chev = el("span", `chev${open ? " open" : ""}`);
-	chev.innerHTML = li("chevron");
-	main.append(tile, text, chev);
+	main.append(tile, text);
+	main.addEventListener("click", () => onSelect(p.id));
 	const cb = document.createElement("input");
 	cb.type = "checkbox";
 	cb.checked = p.enabled;
@@ -1528,28 +1697,44 @@ function pluginItem(p, reload) {
 	});
 	row.append(main, cb);
 	item.append(row);
+	return item;
+}
 
-	// what it says, what it can see, and (while it is on) what the user can set and its banners
-	const more = el("div", "pg-more");
-	more.hidden = !open;
-	main.addEventListener("click", () => {
-		const now = more.hidden;
-		more.hidden = !now;
-		main.setAttribute("aria-expanded", String(now));
-		chev.classList.toggle("open", now);
-		if (now) openPlugins.add(p.id);
-		else openPlugins.delete(p.id);
-		scheduleHubHeight();
-	});
+// the page of a plugin: what it says, what it can see, and (while it is on) what the user can set and its banners
+function pluginDetail(p, reload) {
+	const more = el("div", "pg-more det");
+	const top = el("div", "det-top");
+	const tile = el("span", "tile", (p.name || "?").trim().charAt(0).toUpperCase());
+	tile.style.background = p.enabled ? tintOf(p.id) : "#3a3a40";
+	const who = el("div", "det-who");
+	who.append(el("h3", null, p.name));
+	const meta = [p.from, p.version].filter(Boolean).join(" · ");
+	if (meta) who.append(el("span", "det-meta", meta));
+	top.append(tile, who);
+	more.append(top);
 	if (p.description) more.append(el("div", "pg-about", p.description));
 	if (p.error) more.append(el("div", "pg-about pg-err", p.error));
 	// what it may do: a badge each, and the words of the question before it is switched on in a tooltip
 	if (p.permissions.length) {
 		const perms = el("div", "pg-perms");
 		perms.append(el("span", "pg-perms-title", "Permissions"));
+		// (one badge a name, with the name only: of what it is, is in its tooltip)
+		const groups = new Map();
 		for (const x of p.permissions) {
-			const badge = el("span", "perm-badge", permName(x));
-			badge.dataset.tip = x.why;
+			if (!groups.has(x.name)) groups.set(x.name, []);
+			groups.get(x.name).push(x);
+		}
+		for (const [name, list] of groups) {
+			const badge = el("span", "perm-badge", titleCase(name));
+			const details = list.map((x) => x.detail).filter(Boolean);
+			if (!details.length) badge.dataset.tip = list[0].why;
+			else
+				host.setTip(badge, () => {
+					const box = el("div", "tip-rows");
+					box.append(el("div", "tip-title", titleCase(name)));
+					for (const d of details) box.append(el("div", "tip-detail", d));
+					return box;
+				});
 			perms.append(badge);
 		}
 		more.append(perms);
@@ -1722,8 +1907,132 @@ function pluginItem(p, reload) {
 		if (foot.childElementCount) more.append(foot);
 		if (asking) more.append(ask);
 	}
-	item.append(more);
-	return item;
+	// taking it away (a second press, to be sure)
+	const rm = el("button", "pg-remove", "Remove this plugin");
+	rm.type = "button";
+	let sure = 0;
+	rm.addEventListener("click", async () => {
+		if (!sure) {
+			rm.textContent = "Press again to remove";
+			sure = setTimeout(() => {
+				sure = 0;
+				rm.textContent = "Remove this plugin";
+			}, 3500);
+			return;
+		}
+		clearTimeout(sure);
+		rm.disabled = true;
+		try {
+			await invoke("plugin_remove", { id: p.id });
+		} catch (e) {
+			rm.textContent = `Could not remove: ${e}`;
+			rm.disabled = false;
+			return;
+		}
+		selectedPlugin = "";
+		reload();
+	});
+	more.append(rm);
+	return more;
+}
+
+// the latest release of each repository, asked at most every ten minutes (one small request)
+const latestOf = new Map(); // repo -> { at, tag }
+async function latestTag(repo, force) {
+	const known = latestOf.get(repo);
+	if (!force && known && Date.now() - known.at < 600000) return known.tag;
+	const tag = (await invoke("repo_latest", { repo })) || "";
+	latestOf.set(repo, { at: Date.now(), tag });
+	return tag;
+}
+
+const tip = (node, text) => {
+	node.dataset.tip = text;
+	node.title = text;
+	node.setAttribute("aria-label", text);
+};
+
+/** an icon button for a repository's group: it says (in its tooltip) when a newer release is out, and updates its plugins in place
+ *  (the ones that were on stay on, with their settings) */
+function updateButton(repo, ref, members) {
+	const btn = el("button", "pg-ibtn");
+	btn.type = "button";
+	let newer = "";
+	const show = (icon, text, go = false) => {
+		btn.innerHTML = li(icon);
+		tip(btn, text);
+		btn.classList.toggle("go", go);
+	};
+	show("refresh", "Check for updates");
+	const check = async (force) => {
+		btn.disabled = true;
+		show("refresh", "Checking…");
+		try {
+			const tag = await latestTag(repo, force);
+			newer = tag && tag !== ref ? tag : "";
+			if (newer) show("download", `Update to ${newer}`, true);
+			else show("refresh", tag ? `Up to date (${tag}). Press to check again` : "Check for updates");
+		} catch (_) {
+			show("refresh", "Could not check. Press to try again");
+		}
+		btn.disabled = false;
+	};
+	btn.addEventListener("click", async () => {
+		if (!newer) return check(true);
+		btn.disabled = true;
+		show("refresh", "Updating…");
+		try {
+			const found = await invoke("repo_look", { link: repo, reference: newer });
+			// (the ones here, and the one that takes the place of some of them)
+			const have = new Set(members.map((p) => p.id));
+			const ids = found.plugins.filter((p) => !p.problem && (have.has(p.id) || (p.replaces || []).some((r) => have.has(r)))).map((p) => p.id);
+			await invoke("repo_install", { token: found.token, ids, keepOn: true });
+			latestOf.delete(repo);
+			head.refreshEnabled();
+			refreshActivity();
+			renderPlugins();
+		} catch (e) {
+			show("refresh", `Update failed: ${e}`);
+			btn.disabled = false;
+		}
+	});
+	check(false);
+	return btn;
+}
+
+/** an icon button for a repository's group: it takes every plugin that came from it away (a second press, to be sure) */
+function removeButton(repo, count) {
+	const btn = el("button", "pg-ibtn");
+	btn.type = "button";
+	btn.innerHTML = li("trash");
+	const ask = `Remove ${count === 1 ? "the plugin" : `all ${count} plugins`} from ${repo}`;
+	let sure = 0;
+	tip(btn, ask);
+	btn.addEventListener("click", async () => {
+		if (!sure) {
+			tip(btn, "Press again to remove");
+			btn.classList.add("go");
+			sure = setTimeout(() => {
+				sure = 0;
+				tip(btn, ask);
+				btn.classList.remove("go");
+			}, 3500);
+			return;
+		}
+		clearTimeout(sure);
+		btn.disabled = true;
+		try {
+			await invoke("repo_remove", { repo });
+		} catch (e) {
+			tip(btn, `Could not remove: ${e}`);
+			btn.disabled = false;
+			return;
+		}
+		head.refreshEnabled();
+		refreshActivity();
+		renderPlugins();
+	});
+	return btn;
 }
 
 async function renderPlugins() {
@@ -1732,27 +2041,51 @@ async function renderPlugins() {
 		listing = (await invoke("plugin_list")) || listing;
 	} catch (_) {}
 	document.getElementById("plugin-dnd").checked = !!listing.dnd;
-	document.getElementById("plugin-count").textContent = `Plugins · ${listing.plugins.length}`;
-	// one list: the ones that ship with the app come first (the host orders them), then the folders
-	// (the host lists the ones that ship with the app first, then the folders; the ones from a repository gather under its name)
+	// (the parts of a bundle are not plugins of the list: the bundle is)
+	const shown = listing.plugins.filter((p) => !p.hidden);
+	const count = document.getElementById("plugin-count") || document.querySelector(".set-count");
+	if (count) count.textContent = String(shown.length);
+	if (!shown.some((p) => p.id === selectedPlugin)) selectedPlugin = shown[0]?.id || "";
+	const detail = document.getElementById("plugin-detail");
+	const open = (id) => {
+		selectedPlugin = id;
+		for (const n of document.querySelectorAll("#plugin-list .pl")) n.classList.toggle("sel", n.dataset.id === id);
+		const p = shown.find((x) => x.id === id);
+		detail.replaceChildren(...(p ? [pluginDetail(p, renderPlugins)] : []));
+	};
+	const row = (p) => {
+		const r = pluginRow(p, renderPlugins, open);
+		r.dataset.id = p.id;
+		return r;
+	};
+	// the ones that came from a repository gather under its name; the ones made by hand come first
 	const list = [];
 	const groups = new Map();
-	for (const p of listing.plugins) {
+	const plain = [];
+	for (const p of shown) {
 		if (p.from) {
 			const key = p.from.split(" ")[0];
 			if (!groups.has(key)) groups.set(key, []);
 			groups.get(key).push(p);
-		} else list.push(pluginItem(p, renderPlugins));
+		} else plain.push(p);
 	}
+	const card = (items) => {
+		const c = el("div", "set-card pl-card");
+		c.append(...items);
+		return c;
+	};
+	if (plain.length) list.push(card(plain.map(row)));
 	for (const [repo, members] of groups) {
 		const ref = members[0].from.slice(repo.length).trim();
 		const head = el("div", "pg-group");
-		head.append(el("b", null, repo), el("span", null, `${ref ? `${ref} · ` : ""}${members.length} ${members.length === 1 ? "plugin" : "plugins"}`));
-		const up = el("button", "set-btn pg-update", "Check for updates");
-		up.type = "button";
-		up.addEventListener("click", () => addFromGitHub({ prefill: repo, tint: tintOf, onChange: renderPlugins }));
-		head.append(up);
-		list.push(head, ...members.map((p) => pluginItem(p, renderPlugins)));
+		head.append(el("b", null, repo), el("span", null, `${ref ? `${ref} · ` : ""}${members.length}`));
+		const gh = el("button", "pg-ibtn");
+		gh.type = "button";
+		gh.innerHTML = li("external");
+		tip(gh, "Open the repository on GitHub");
+		gh.addEventListener("click", () => invoke("repo_open", { repo }).catch(() => {}));
+		head.append(updateButton(repo, ref, members), gh, removeButton(repo, members.length));
+		list.push(head, card(members.map(row)));
 	}
 	// (nothing from a repository yet: the way to it, first)
 	if (!groups.size) {
@@ -1766,18 +2099,18 @@ async function renderPlugins() {
 		list.unshift(get);
 	}
 	document.getElementById("plugin-list").replaceChildren(...list);
-	scheduleHubHeight();
+	open(selectedPlugin);
 	checkMoved(listing);
 }
 
 // Time and Calendar used to come inside the app: whoever had them on is asked once, at the start
 let movedAsked = false;
 function checkMoved(listing) {
-	if (!listing?.moved?.length || movedAsked) return;
+	if (SETTINGS || !listing?.moved?.length || movedAsked) return;
 	movedAsked = true;
 	askMoved({ moved: listing.moved, tint: tintOf, onChange: renderPlugins });
 }
-if (!FLOATS) setTimeout(() => invoke("plugin_list").then(checkMoved).catch(() => {}), 2500);
+if (!FLOATS && !SETTINGS) setTimeout(() => invoke("plugin_list").then(checkMoved).catch(() => {}), 2500);
 document.getElementById("plugin-dnd").addEventListener("change", (e) => invoke("plugin_dnd", { on: e.target.checked }));
 document.getElementById("plugin-add").addEventListener("click", () => addFromGitHub({ tint: tintOf, onChange: renderPlugins }));
 document.getElementById("plugin-folder").addEventListener("click", () => invoke("plugin_folder"));
@@ -1788,12 +2121,10 @@ document.getElementById("plugin-rescan").addEventListener("click", async () => {
 	renderPlugins();
 });
 
-let lastActivitySignature = "";
 // All the cards of the moment, built: what the hub lists and what the floating cards are made from.
 async function fetchCards() {
 	const a = await invoke("get_activity");
 	const cards = [];
-	for (const p of plugins) if (a.cards?.[p.id]) cards.push(...(await p.cards(a.cards[p.id])));
 	for (const p of a.plugins || []) cards.push(pluginCard(p));
 	// (a stable sort: cards of one rank keep the order their plugin gave them)
 	cards.sort((x, y) => (x._rank ?? 50) - (y._rank ?? 50));
@@ -1814,20 +2145,8 @@ async function refreshActivity() {
 	floatKeys.clear();
 	for (const i of await invoke("float_list")) floatKeys.add(i.key);
 	const cards = built.cards.filter((c) => !floatKeys.has(c._key));
-	const signature = cards
-		.map((c) => c._sig ?? c.outerHTML)
-		.join("");
-	if (signature !== lastActivitySignature) {
-		lastActivitySignature = signature;
-		nowCardsEl.replaceChildren(...cards);
-	} else {
-		// same cards, new numbers: update in place so a click is never lost to a re-render
-		cards.forEach((c, i) => {
-			const old = nowCardsEl.children[i];
-			if (old && old._update && c._data)
-				old._update(c._data);
-		});
-	}
+	// (the tiles draw their faces from the cards, and the page of the one that is pressed holds them: see tiles.js)
+	updateTiles(cards);
 	hubHasActivity = cards.length > 0;
 	updateInfoEmpty();
 }
@@ -1967,8 +2286,53 @@ host.setTip = (target, content) => {
 	}
 	if (target === tipTarget) refreshTip(target);
 };
-host.invalidate = () => (lastActivitySignature = "");
+host.invalidate = () => {};
 host.refresh = () => refreshActivity();
 host.enter = playEnter;
-for (const p of plugins) p.init?.();
-initPluginUi();
+if (!SETTINGS) {
+	for (const p of plugins) p.init?.();
+	initPluginUi();
+}
+
+// ---- the settings window, and the island's side of it ----
+if (SETTINGS) {
+	document.title = "NADI Settings";
+	listen("settings-page", (e) => showSettingsTab(e.payload));
+	listen("plugins-changed", () => {
+		renderPlugins();
+		renderRest();
+	});
+	listen("rest-changed", () => renderRest());
+	initRestEditor(document.getElementById("rest-edit"));
+	loadSettingsIntoForm();
+	let first = new URLSearchParams(location.search).get("page");
+	if (!first) {
+		try {
+			first = localStorage.getItem("nadi.settingsTab");
+		} catch (_) {}
+	}
+	showSettingsTab(first);
+	window.__TAURI__.app
+		.getVersion()
+		.then((v) => (document.getElementById("about-version").textContent = v))
+		.catch(() => {});
+	document.getElementById("about-repo").addEventListener("click", () => invoke("repo_open", { repo: "Llyme/not-another-dynamic-island" }).catch(() => {}));
+	document.getElementById("about-plugins").addEventListener("click", () => invoke("repo_open", { repo: "Llyme/nadi-plugins" }).catch(() => {}));
+	document.getElementById("about-folder").addEventListener("click", () => invoke("plugin_folder"));
+	// Esc clears the search, then closes the window; Ctrl+F is the search
+	window.addEventListener("keydown", (e) => {
+		if (e.key === "Escape") {
+			if (findEl.value) {
+				findEl.value = "";
+				showResults("");
+			} else invoke("settings_window", { action: "close" });
+		} else if (e.ctrlKey && /^f$/i.test(e.key)) {
+			e.preventDefault();
+			findEl.focus();
+			findEl.select();
+		}
+	});
+} else if (!FLOATS) {
+	// (a setting was changed in the settings window: the island shows it)
+	listen("settings-changed", () => loadSettingsIntoForm());
+}

@@ -116,6 +116,7 @@ pub async fn pick_background(window: WebviewWindow, kind: String) -> Result<Opti
     let old = std::mem::replace(field, dest.to_string_lossy().into_owned());
     remove_owned(&old);
     settings::save_to_disk(&guard);
+    let _ = tauri::Emitter::emit(&window, "settings-changed", ());
     Ok(Some(guard.clone()))
 }
 
@@ -127,5 +128,6 @@ pub fn clear_background(window: WebviewWindow, kind: String) -> Result<Settings,
     let old = std::mem::take(field);
     remove_owned(&old);
     settings::save_to_disk(&guard);
+    let _ = tauri::Emitter::emit(&window, "settings-changed", ());
     Ok(guard.clone())
 }

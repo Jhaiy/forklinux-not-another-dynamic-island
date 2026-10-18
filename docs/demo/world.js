@@ -39,6 +39,7 @@
     chat: { name: "Discord", exe: "discord.exe", cat: "communication" },
     music: { name: "Music", exe: "spotify.exe", cat: "media" },
     game: { name: "Starfall", exe: "starfall.exe", cat: "other" },
+    settings: { name: "NADI Settings", exe: "nadi.exe", cat: "other" },
   });
   const byExe = (exe) => Object.keys(APPS).find((id) => APPS[id].exe === exe);
   const visible = () => Object.keys(APPS).filter((id) => W.win[id] && W.win[id].open && !W.win[id].min);
@@ -122,23 +123,36 @@
       return true; // (asked before the list of plugins exists)
     }
   };
-  function npPill(snaps) {
+  // the resting island Now playing offers (rest.rs): on when the user switched it on, and then it takes the place of its pill
+  const restPrefs = { on: true, custom: {} };
+  const NP_SHIPPED = { left: "now-playing:song", center: "", right: "now-playing:playpause" };
+  function npSurface(snaps) {
     const m = npPrimary(snaps);
-    if (!m || !npOn()) return null;
-    return { plugin: "now-playing", name: "Now playing", icon: "music", image: m.art || "", title: m.title, sub: m.artist, right: "", progress: m.duration > 0 ? m.position / m.duration : null, bars: [], buttons: npButtons(m), rank: 30, w: 260, h: 40, look: "" };
+    const playing = !!(m && npOn() && media.playing);
+    return {
+      widgets: {
+        song: { blocks: m && npOn() ? [{ item: { tile: m.art || "", icon: "music", text: m.title, sub: m.artist } }] : [], tip: [] },
+        playpause: { blocks: m && npOn() ? [{ icon_button: { icon: media.playing ? "pause" : "play", press: "playpause", label: media.playing ? "Pause" : "Play" } }] : [], tip: [] },
+      },
+      pane: null,
+      rest: playing ? ["playing"] : [],
+    };
+  }
+  // (Now playing offers a resting island: it is what the pill became, so the pill never shows)
+  function npPill() {
+    return null;
   }
   function npCard(snaps) {
     const m = npPrimary(snaps);
     if (!m || !npOn()) return null;
-    const body = [{ kind: "buttons", items: npButtons(m) }];
-    if (m.duration > 0) body.push({ kind: "seek", value: m.position / m.duration, action: "seek" });
-    const more = [];
-    if (m.can_seek) more.push({ label: "Back 5 seconds", icon: "back", action: "back" }, { label: "Forward 5 seconds", icon: "fwd", action: "fwd" });
-    if (m.can_rate) more.push({ label: `${Number(m.rate.toFixed(2))}×`, icon: "", action: "rate" });
-    if (more.length) body.push({ kind: "buttons", items: more });
+    const body = [];
+    const back = m.can_seek ? [{ label: "Back 5 seconds", icon: "back", action: "back" }] : [];
+    const after = [...(m.can_seek ? [{ label: "Forward 5 seconds", icon: "fwd", action: "fwd" }] : []), ...(m.can_rate ? [{ label: `${Number(m.rate.toFixed(2))}×`, icon: "", action: "rate" }] : [])];
+    if (m.duration > 0) body.push({ kind: "seek", value: m.position / m.duration, action: "seek", before: back, after });
+    else if (back.length || after.length) body.push({ kind: "buttons", items: [...back, ...after] });
     const others = snaps.filter((o) => o.source !== m.source && o.title);
     if (others.length) body.push({ kind: "list", rows: others.map((o) => ({ title: o.title, sub: o.artist, progress: null })) });
-    return { plugin: "now-playing", name: "Now playing", icon: "music", rank: 10, title: m.title, sub: m.artist, peek: "", image: m.art || "", body };
+    return { plugin: "now-playing", name: "Now playing", icon: "music", rank: 10, title: m.title, sub: m.artist, peek: "", image: m.art || "", controls: npButtons(m), body };
   }
   let npSnaps = [];
   W.npPill = () => npPill(npSnaps);
@@ -154,6 +168,7 @@
     NADI.emit("media-tick", snaps);
     npSnaps = snaps;
     NADI.emit("plugin-pill", { plugin: "now-playing", pill: npPill(snaps) });
+    NADI.emit("plugin-surface", { plugin: "now-playing", ...npSurface(snaps), open: false });
     W.onMedia?.(primaryOf(snaps));
   }
   W.mediaEmit = mediaEmit;
@@ -238,7 +253,7 @@
   function gameEmit() {
     const snap = gameSnap();
     st.hasGame = snap.has_game;
-    NADI.emit("game-tick", snap);
+    NADI.emit("plugin-pill", { plugin: "games", pill: snap.has_game ? W.gamePill() : null });
   }
   W.gameEmit = gameEmit;
   W.gameStart = () => {
@@ -252,27 +267,48 @@
     gameEmit();
   };
   setInterval(gameEmit, 1500);
-  C.get_game_stats = ({ pids }) =>
-    pids
-      .filter((p) => p === game.pid && game.running)
-      .map((pid) => {
-        const f = game.frames.slice(-120);
-        const avg = f.length ? f.reduce((a, b) => a + b, 0) / f.length : 16.7;
-        const sorted = [...f].sort((a, b) => a - b);
-        const p99 = sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.99))] : avg;
-        return {
-          pid,
-          cpu_pct: Math.min(100, 14 + Math.sin(now() / 2) * 4 + Math.random() * 3),
-          ram_gb: 4.1 + Math.sin(now() / 30) * 0.05,
-          ram_pct: 12.8,
-          gpu_pct: clamp(58 + Math.sin(now() / 1.7) * 14 + Math.random() * 4, 0, 100),
-          vram_gb: 3.4 + Math.sin(now() / 25) * 0.1,
-          fps: f.length > 10 ? 1000 / avg : null,
-          low_fps: f.length > 10 ? 1000 / p99 : null,
-          frame_ms: f.slice(-60),
-          fps_denied: false,
-        };
-      });
+  // what the Games module answers (the real one is games in nadi-plugins): a card, and a pill with three small bars
+  const gameUse = () => {
+    const f = game.frames.slice(-120);
+    const avg = f.length ? f.reduce((a, b) => a + b, 0) / f.length : 16.7;
+    const sorted = [...f].sort((a, b) => a - b);
+    const p99 = sorted.length ? sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.99))] : avg;
+    return {
+      cpu: Math.min(100, 14 + Math.sin(now() / 2) * 4 + Math.random() * 3),
+      ram_gb: 4.1 + Math.sin(now() / 30) * 0.05,
+      ram: 12.8,
+      gpu: clamp(58 + Math.sin(now() / 1.7) * 14 + Math.random() * 4, 0, 100),
+      vram_gb: 3.4 + Math.sin(now() / 25) * 0.1,
+      fps: f.length > 10 ? 1000 / avg : null,
+      low_fps: f.length > 10 ? 1000 / p99 : null,
+      frame_ms: f.slice(-60),
+    };
+  };
+  const playFor = (s) => (s >= 3600 ? `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m` : s >= 60 ? `${Math.floor(s / 60)}m` : "<1m");
+  W.gameCards = () => {
+    if (!game.running) return [];
+    const u = gameUse();
+    const body = [];
+    if (u.fps != null) {
+      body.push({ kind: "facts", rows: [["FPS", String(Math.round(u.fps))], ["1% low", String(Math.round(u.low_fps))], ["Frame time", `${(1000 / u.fps).toFixed(1)} ms`]] });
+      body.push({ kind: "graph", values: u.frame_ms.map((v) => Math.round(v * 10) / 10), max: 50, marks: [16.7, 33.3] });
+    }
+    body.push({
+      kind: "list",
+      rows: [
+        { title: "GPU", sub: `${Math.round(u.gpu)}%`, progress: u.gpu / 100 },
+        { title: "VRAM", sub: `${u.vram_gb.toFixed(1)} GB`, progress: Math.min(1, u.vram_gb / 12) },
+        { title: "CPU", sub: `${Math.round(u.cpu)}%`, progress: u.cpu / 100 },
+        { title: "RAM", sub: `${u.ram_gb.toFixed(1)} GB`, progress: u.ram / 100 },
+      ],
+    });
+    return [{ plugin: "games", id: "", name: "Games", icon: "gamepad", rank: 10, title: "Starfall", sub: `Playing for ${playFor(now() - game.since)}`, peek: u.fps != null ? `${Math.round(u.fps)} FPS` : `GPU ${Math.round(u.gpu)}%`, image: ICONS.game, body }];
+  };
+  W.gamePill = () => {
+    if (!game.running) return null;
+    const u = gameUse();
+    return { plugin: "games", name: "Games", icon: "gamepad", image: ICONS.game, title: "Starfall", sub: "", right: u.fps != null ? `${Math.round(u.fps)} FPS` : "", progress: null, bars: [u.gpu / 100, u.cpu / 100, u.ram / 100], buttons: [], rank: 20, w: 320, h: 40, look: "" };
+  };
 
   // ---------------------------------------------------------------- editor + git state (the coding card)
   const code = (W.code = { file: "island.rs", unsaved: false, typedLines: 0 });
@@ -322,10 +358,30 @@
       }
     }
   }, 500);
-  const downloadCards = () => {
+  // what the Downloads module answers (the real one is downloads in nadi-plugins): the combined speed, a row for each, a button for each that is done
+  const dlSpeeds = [];
+  setInterval(() => {
+    dlSpeeds.push(dl.items.filter((i) => !i.done).reduce((s, i) => s + i.speed, 0));
+    if (dlSpeeds.length > 30) dlSpeeds.shift();
+  }, 1500);
+  const dlBytes = (n) => {
+    let v = n / 1024;
+    let u = 0;
+    for (; v >= 1024 && u < 3; u++) v /= 1024;
+    return `${v >= 100 ? Math.round(v) : v.toFixed(1)} ${["KB", "MB", "GB", "TB"][u]}`;
+  };
+  W.downloadCards = () => {
     if (!dl.items.length) return [];
-    const items = dl.items.slice(-3).map((i) => ({ ...i }));
-    return [{ speed: items.reduce((s, i) => s + (i.done ? 0 : i.speed), 0), items }];
+    const active = dl.items.filter((i) => !i.done);
+    const done = dl.items.filter((i) => i.done);
+    const speed = active.reduce((s, i) => s + i.speed, 0);
+    const body = [];
+    const top = Math.max(0, ...dlSpeeds);
+    if (top > 0 && active.length) body.push({ kind: "graph", values: [...dlSpeeds], max: Math.max(top * 1.15, 100000), marks: [] });
+    if (active.length) body.push({ kind: "list", rows: active.slice(0, 8).map((i) => ({ title: `${i.source} · ${i.name}`, sub: `${Math.floor((i.received / i.total) * 100)}%${i.speed > 1024 ? ` · ${dlBytes(i.speed)}/s` : ""}`, progress: Math.min(1, i.received / i.total) })) });
+    if (done.length) body.push({ kind: "buttons", items: done.slice(0, 4).map((i) => ({ label: `Show ${i.name}`, icon: "", action: `done:${i.id}` })) });
+    const sub = !active.length ? `${done.length} done` : done.length ? `${active.length} downloading · ${done.length} done` : `${active.length} downloading`;
+    return [{ plugin: "downloads", id: "", name: "Downloads", icon: "download", rank: 20, title: "Downloads", sub, peek: active.length ? (speed > 1024 ? `${dlBytes(speed)}/s` : "") : `${done.length} done`, image: "", body }];
   };
   C.download_item_click = ({ id }) => {
     dl.items = dl.items.filter((i) => i.id !== id);
@@ -339,27 +395,41 @@
     );
 
   // ---------------------------------------------------------------- Claude usage (the hub's two rings and the peek)
+  // (what the Claude usage module answers: two bars with a tooltip, a ring for each in the tray, and a peek that slides)
   const usage = (W.usage = { five: 38, seven: 61 });
-  W.usageRings = true;
-  const usageSnap = () => ({
-    available: !!S().llm_detection && W.usageRings,
-    error: null,
-    five_hour: { pct: usage.five, resets_at: new Date(Date.now() + 2.2 * 3600e3).toISOString() },
-    seven_day: { pct: usage.seven, resets_at: new Date(Date.now() + 3.2 * 86400e3).toISOString() },
-  });
-  C.get_usage = () => usageSnap();
-  C.refresh_usage = () => NADI.emit("usage-tick", usageSnap());
+  const cuTone = (p, own) => (p >= 100 ? "#E5675C" : p >= 80 ? "#E6A15A" : own);
+  const cuBack = (hours) => {
+    const m = Math.round(hours * 60);
+    return m < 60 ? `${m}m` : m < 1440 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${Math.floor(m / 1440)}d ${Math.floor((m % 1440) / 60)}h`;
+  };
+  const CU = [["5H", "five", "#D97757", 2.2, "five_hour"], ["7D", "seven", "#E8D5B5", 76.8, "seven_day"]];
+  function cuSurface() {
+    if (!isOn("claude-usage")) return { widgets: {}, pane: null };
+    const plain = CU.map(([l, k, c]) => ({ label: l, part: usage[k] / 100, color: cuTone(usage[k], c), text: "" }));
+    const wide = CU.map(([l, k, c, h]) => ({ label: l, part: usage[k] / 100, color: cuTone(usage[k], c), text: `${Math.round(usage[k])}%`, sub: `Back in ${cuBack(h)}` }));
+    return { widgets: { bars: { blocks: [{ bars: plain }], tip: [{ bars: wide },{ text: "Click to refresh", kind: "muted" }] } }, pane: null };
+  }
+  const cuRings = () => CU.map(([l, k, , h, id]) => ({ id, pct: usage[k], tip: `Claude ${l.toLowerCase()} · ${Math.round(usage[k])}%\nResets in ${cuBack(h)} · Click to refresh`, color: "#E8963C", start: false }));
+  const cuPill = (v) => ({ plugin: "claude-usage", name: "Claude usage", icon: "sparkle", image: "", title: "", sub: "", right: "", progress: null, bars: [], buttons: [], rank: 100, w: 240, h: 78, look: "", brief: true, tile: null, rows: [{ label: "5h", value: v[0] / 100, text: `${Math.round(v[0])}%` }, { label: "7d", value: v[1] / 100, text: `${Math.round(v[1])}%` }] });
+  const cuEmit = () => {
+    NADI.emit("plugin-surface", { plugin: "claude-usage", ...cuSurface() });
+    NADI.emit("plugin-rings", { plugin: "claude-usage", rings: isOn("claude-usage") ? cuRings() : [] });
+  };
   function bumpUsage(five, seven) {
     const old = [usage.five, usage.seven];
     usage.five = Math.min(99, usage.five + five);
     usage.seven = Math.min(99, usage.seven + seven);
-    NADI.emit("usage-tick", usageSnap());
-    // maybe_peek: not over the hub, not while something else is showing
-    if (st.hubOpen || notif.hasCurrent()) return;
-    NADI.emit("usage-peek", { before: { five_hour: old[0], seven_day: old[1] }, after: { five_hour: usage.five, seven_day: usage.seven } });
+    cuEmit();
+    // the peek: not over the hub, not while something else is showing
+    if (!isOn("claude-usage") || st.hubOpen || notif.hasCurrent()) return;
+    NADI.emit("plugin-pill", { plugin: "claude-usage", pill: cuPill(old) });
+    setTimeout(() => NADI.emit("plugin-pill", { plugin: "claude-usage", pill: cuPill([usage.five, usage.seven]) }), 500);
     st.usagePeekUntil = now() + 4.4;
   }
   W.bumpUsage = bumpUsage;
+  setInterval(() => {
+    if (isOn("claude-usage")) cuEmit();
+  }, 5000);
 
   // ---------------------------------------------------------------- calendar
   const cal = (() => {
@@ -451,10 +521,10 @@
     if (prev === next) return;
     llm.kind = next;
     const ts = Date.now();
-    if (prev === "waiting" && next !== "waiting") notif.cancelBrief(llm.id);
+    if (prev === "waiting" && next !== "waiting") notif.cancelBrief(`plugin:claude-sessions:${llm.id}`);
     if (next === "busy") llm.busySince = ts;
     llm.updated = ts;
-    if (!(S().llm_detection && S().llm_brief)) return;
+    if (!(isOn("claude") && S().llm_brief)) return;
     if (next === "waiting") llmBrief("waiting");
     else if (prev === "busy" && next === "idle" && ts - llm.busySince >= 5000) {
       bumpUsage(3, 1);
@@ -464,7 +534,8 @@
   function llmBrief(state) {
     if (st.hubOpen || st.hasGame) return; // the hub shows the cards already; a game is not interrupted
     if (W.fg === "term") return; // the terminal is in front: you are looking at it
-    notif.pushBrief(llm.title, { id: llm.id, state, host_icon: "term", host_exe: APPS.term.exe, project: "nadi-demo", ctx: Math.min(1, llm.tokens / 200000) });
+    const ring = Math.min(1, llm.tokens / 200000);
+    notif.pushBrief(llm.title, { id: `plugin:claude-sessions:${llm.id}`, state: "plugin", plugin: "claude-sessions", host_icon: "term", host_exe: APPS.term.exe, project: "nadi-demo", ctx: 0, look: "", dwell_ms: 0, tile: { text: "C", color: "#e08a5a", ring, ring_color: ring > 0.85 ? "#e87a7a" : ring > 0.65 ? "#e8b04a" : "#5ac88c" }, badges: [{ icon: "term", tip: "Terminal\nnadi-demo" }], tone: state, press: "focus" });
   }
   W.llmRun = (prompt) => {
     if (llm.kind === "busy" || llm.kind === "waiting") return;
@@ -511,7 +582,7 @@
   };
   W.llmReset = () => {
     llmClear();
-    notif.cancelBrief(llm.id);
+    notif.cancelBrief(`plugin:claude-sessions:${llm.id}`);
     llm.kind = "none";
     llm.feed = [];
     llm.tokens = 0;
@@ -536,33 +607,23 @@
     return "idle";
   };
   W.llmState = llmState;
+  // what the Claude Code module answers (the real one is claude-code in nadi-plugins): a card for the session
+  const kTokens = (n) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : `${Math.round(n / 1000)}k`);
   const llmCards = () => {
     if (llm.kind === "none") return [];
     const state = llmState();
     if (state === "idle") return [];
-    return [
-      {
-        id: llm.id,
-        pid: 5150,
-        provider: "claude",
-        title: llm.title,
-        project: "nadi-demo",
-        host: "Terminal",
-        host_icon: "term",
-        host_exe: APPS.term.exe,
-        state,
-        activity: state === "waiting" ? { icon: "phone", text: "Waiting for your approval" } : state === "finished" ? { icon: "check", text: "Finished" } : llm.activity,
-        context_tokens: Math.round(llm.tokens),
-        context_limit: 200000,
-        model: "Sonnet 5.5",
-        running_secs: Math.floor((Date.now() - llm.started) / 1000),
-        prompt: llm.prompt,
-        feed: llm.feed.slice(),
-        cost_usd: llm.cost,
-        lines_added: llm.added,
-        lines_removed: llm.removed,
-      },
-    ];
+    const act = state === "waiting" ? { icon: "phone", text: "Waiting for your approval" } : state === "finished" ? { icon: "check", text: "Finished" } : llm.activity;
+    const frac = Math.min(1, llm.tokens / 200000);
+    const color = frac > 0.85 ? "#e87a7a" : frac > 0.65 ? "#e8b04a" : "#5ac88c";
+    const rows = (state === "working" ? [{ ...act, now: true }, ...llm.feed.slice(0, 2)] : llm.feed.slice(0, 3)).map((f) => ({ icon: f.icon, text: f.text, now: !!f.now }));
+    const body = [];
+    if (llm.prompt) body.push({ kind: "text", label: "Prompt", text: llm.prompt });
+    if (rows.length) body.push({ kind: "lines", rows });
+    body.push({ kind: "meter", label: "Context", value: frac, text: `${kTokens(llm.tokens)} / ${kTokens(200000)}`, color });
+    body.push({ kind: "stats", items: [{ value: fmtDur(Math.floor((Date.now() - llm.started) / 1000)), label: "Running" }, { value: `$${llm.cost.toFixed(2)}`, label: "Cost" }, { value: `+${llm.added} \u2212${llm.removed}`, label: "Lines" }, { value: "Sonnet 5.5", label: "Model" }] });
+    if (state === "waiting" || state === "finished") body.push({ kind: "buttons", items: [{ label: "Focus", icon: "", action: "focus" }] });
+    return [{ plugin: "claude-sessions", id: "s1", name: "Claude Code", icon: "sparkle", rank: state === "working" ? 30 : 1, title: llm.title, sub: act.text, peek: "", image: "", controls: [], tile: { text: "C", color: "#e08a5a", ring: frac, ring_color: color }, sub_icon: act.icon, tone: state, badges: [{ icon: "term", tip: "Terminal\nnadi-demo" }], body }];
   };
   C.llm_dismiss = () => {
     llm.dismissed = llm.updated;
@@ -697,12 +758,22 @@
     return { id: "walkthrough", label: "Walkthrough", confidence: 0.97, fields, main: page.title, sub: `${total} steps` };
   }
   W.pageKind = () => (S().page_preview && !blockedPage() ? pageKind() : null);
+  // what the Page Reader module answers (the real one is page-reader in nadi-plugins): a card for the page, from what the kind says
+  W.pageCards = () => {
+    const r = recent.get("browsing");
+    const k = W.pageKind();
+    if (!k || !r || now() - r.last > 180) return [];
+    const body = [];
+    if (S().page_images) body.push({ kind: "picture", id: 1 });
+    body.push({ kind: "facts", rows: k.fields.map((f) => [f.key, f.value]) });
+    if (page.lead) body.push({ kind: "text", text: page.lead, label: "" });
+    if (page.buttons.length) body.push({ kind: "buttons", items: page.buttons.map((label) => ({ label, icon: "", action: `press:${label}` })) });
+    return [{ plugin: "page-reader", id: "p1", name: "Page Reader", icon: "steps", rank: 60, title: page.title, sub: `${k.label} · ${page.domain}`, peek: k.sub, image: "", controls: [], focus: "focus", body }];
+  };
+  C.browser_get = ({ what }) => (what === "image" ? C.page_image() : null);
 
   C.get_activity = () => {
-    const snap = { games: [], downloads: [], llm: [], work: [], coding: null, plugins: [] };
-    if (game.running) snap.games.push({ pid: game.pid, name: "Starfall", exe_path: APPS.game.exe, icon: ICONS.game, playtime_secs: now() - game.since });
-    if (S().llm_detection) snap.llm = llmCards();
-    if (S().download_detection) snap.downloads = downloadCards();
+    const snap = { work: [], coding: null, plugins: [] };
     if (!S().work_detection) return snap;
     const list = [...recent.entries()].filter(([, r]) => now() - r.last <= RECENT_ACTIVE_S).sort((a, b) => b[1].started - a[1].started);
     for (const [cat, r] of list) {
@@ -768,6 +839,7 @@
     media: ["See what is playing: the title, the artist and how far along it is."],
     "media pictures": ["See the cover picture of what is playing."],
     "media control": ["Press play, pause, next and previous for the player."],
+    downloads: ["See what your browsers, Steam and qBittorrent are downloading now: the file names and how far along they are."],
     calendar: ["Read the events of the island's calendar (whichever plugin brought them)."],
     clock: ["Know the date and the time."],
   };
@@ -778,11 +850,12 @@
   C.look_state = () => ({ eyes: S().show_eyes !== false, eyes_react: W.eyesReact, eyes_rings: W.eyesRings, brightness: W.lightBrightness, sound: S().react_to_audio !== false, ambient: S().audio_bleed ?? 60 });
   const lookTick = () => NADI.emit("look-tick", C.look_state());
   const BUILT_IN = [
-    { id: "games", name: "Games", description: "The game you are playing, for how long, and how it runs.", sees: [["windows"], ["performance"]], on: () => S().game_detection, set: (v) => patch({ game_detection: v }) },
+    { id: "games", kind: "wasm", name: "Games", description: "The game you are playing, for how long, and how it runs: frames per second, and what it uses of the CPU, the memory and the graphics card.", sees: [["processes"], ["program details"], ["performance"]], on: () => S().game_detection, set: (v) => patch({ game_detection: v }) },
     { id: "work", kind: "wasm", name: "Work", description: "What you work on: your editor, your hours, and a pill for the session you are in.", sees: [["windows"], ["idle time"], ["use CLI", "git"]], on: () => S().work_detection, set: (v) => patch({ work_detection: v }) },
-    { id: "page-reader", name: "Page Reader", description: "A card for each page you have open, and what the page in front of you says (needs the NADI browser extension).", sees: [["windows"], ["browser extension"]], on: () => S().page_preview, set: (v) => patch({ page_preview: v }), note: () => (S().page_preview ? "Reading pages in Edge." : null), settings: [{ key: "images", label: "Show the page's main picture", type: "toggle", get: () => S().page_images, set: (v) => patch({ page_images: v }) }] },
-    { id: "downloads", name: "Downloads", description: "What your browsers, Steam and qBittorrent are downloading right now.", sees: [["read files and folders"]], on: () => S().download_detection, set: (v) => patch({ download_detection: v }) },
-    { id: "claude-code", name: "Claude Code", description: "Your Claude Code sessions as cards, a pill when one needs you or has finished, and how much of your Claude 5-hour and 7-day limits you have used.", sees: [["read files and folders"], ["windows"], ["network", "api.anthropic.com, console.anthropic.com"]], on: () => S().llm_detection, set: (v) => { patch({ llm_detection: v }); NADI.emit("usage-tick", usageSnap()); }, actions: [{ id: "usage_login", label: "Sign In", ask: "Paste the code the Claude page shows", then: "usage_finish" }], settings: [{ key: "alerts", label: "Pill when a session needs me or finishes", type: "toggle", get: () => S().llm_brief, set: (v) => patch({ llm_brief: v }) }, { key: "usage", label: "Rings for how much of my limits is used", type: "toggle", get: () => W.usageRings, set: (v) => { W.usageRings = v; NADI.emit("usage-tick", usageSnap()); } }] },
+    { id: "page-reader", kind: "wasm", name: "Page Reader", description: "A card for each page you have open, and what the page in front of you says (needs the NADI browser extension).", sees: [["processes"], ["titles"], ["program details"], ["browser extension"]], on: () => S().page_preview, set: (v) => patch({ page_preview: v }), note: () => (S().page_preview ? "Reading pages in Edge." : null), settings: [{ key: "images", label: "Show the page's main picture", type: "toggle", get: () => S().page_images, set: (v) => patch({ page_images: v }) }] },
+    { id: "downloads", kind: "wasm", name: "Downloads", description: "What your browsers, Steam and qBittorrent are downloading right now.", sees: [["downloads"]], on: () => S().download_detection, set: (v) => patch({ download_detection: v }) },
+    { id: "claude", kind: "wasm", name: "Claude", description: "Your Claude Code sessions as cards, a pill when one needs you or has finished, and how much of your Claude 5-hour and 7-day limits you have used.", sees: [["claude sessions"], ["processes"], ["titles"], ["program details"], ["network", "api.anthropic.com"], ["network", "console.anthropic.com"], ["storage"], ["open links", "https://claude.ai/oauth/authorize"]], on: () => S().llm_detection, set: (v) => { patch({ llm_detection: v }); cuEmit(); }, settings: [{ key: "alerts", label: "Pill when a session needs me or finishes", type: "toggle", get: () => S().llm_brief, set: (v) => patch({ llm_brief: v }) }, { key: "usage", label: "Show how much of my limits is used", type: "toggle", get: () => W.usageOn !== false, set: (v) => { W.usageOn = v; cuEmit(); } }], actions: [{ id: "usage_login", label: "Sign In", ask: "Paste the code the Claude page shows", then: "usage_finish" }] },
+    { id: "claude-usage", hidden: true, kind: "wasm", name: "Claude", description: "", sees: [], on: () => !!S().llm_detection && W.usageOn !== false },
     { id: "now-playing", kind: "wasm", name: "Now playing", description: "A pill and a card for what is playing, with play, skip, seek and speed.", sees: [["media"], ["media pictures"], ["media control"]] },
     { id: "toasts", kind: "wasm", name: "Notification mirror", description: "Shows the notifications of other apps (Discord, Viber, ...) on the island.", sees: [["notifications"], ["windows"]] },
     { id: "eyes", kind: "face", faces: [{ id: "island", slot: "island", file: "face.js" }, { id: "head", slot: "widget", file: "face.js", name: "Eyes", place: "center", rank: 20, width: 72, shared: true }], name: "Eyes", description: "The two eyes of the island: they blink, look at the cursor, squash and stretch as it moves, glance around when it rests, and show moods. They can bounce to the beat of what you play.", sees: [["cursor position"], ["audio"]], on: () => S().show_eyes !== false, set: (v) => { patch({ show_eyes: v }); lookTick(); }, settings: [{ key: "react", label: "React to sound", type: "toggle", get: () => W.eyesReact, set: (v) => { W.eyesReact = v; NADI.emit("plugin-setting", { plugin: "eyes", key: "react", value: v }); } }, { key: "rings", label: "Ripples on the bass", type: "toggle", get: () => W.eyesRings, set: (v) => { W.eyesRings = v; NADI.emit("plugin-setting", { plugin: "eyes", key: "rings", value: v }); } }] },
@@ -803,6 +876,7 @@
       version: "1.0.0",
       kind: p.kind || "native",
       bundled: true,
+      hidden: !!p.hidden,
       enabled: isOn(p.id),
       muted: false,
       permissions: p.sees.map(([name, detail]) => ({ name, detail: detail || "", why: grants(name, detail || "") })),
@@ -812,11 +886,49 @@
       error: null,
       note: p.note ? p.note() : null,
       faces: p.faces || [],
-      widgets: p.id === "ics-calendar" ? [{ id: "date", name: "Date and time", place: "left", rank: 10, width: 118, interactive: true, start: null }] : p.id === "system-meters" ? [{ id: "bars", name: "Bars", place: "right", rank: 50, width: 76, interactive: false, start: null }] : [],
+      widgets: p.id === "now-playing" ? [{ id: "song", name: "Song", place: "left", rank: 40, width: 120, interactive: false, start: false }, { id: "playpause", name: "Play / pause", place: "right", rank: 41, width: 30, interactive: true, start: false }] : p.id === "ics-calendar" ? [{ id: "date", name: "Date and time", place: "left", rank: 10, width: 118, interactive: true, start: null }] : p.id === "system-meters" ? [{ id: "bars", name: "Bars", place: "right", rank: 50, width: 76, interactive: false, start: null }] : p.id === "claude-usage" ? [{ id: "bars", name: "Bars", place: "right", rank: 40, width: 68, interactive: true, start: null }] : [],
     })),
   });
   C.plugin_rescan = () => C.plugin_list();
-  C.plugin_pills = () => ({ pills: [W.npPill?.(), isOn("work") ? W.workPillNow : null].filter(Boolean), rings: {} });
+  // the resting island: what the user chose (rest.rs). No plugin offers an island here: there is the user's own.
+  const rest = { mine: { left: null, center: null, right: null }, edited: false };
+  C.rest_get = () => ({
+    mine: rest.mine,
+    edited: rest.edited,
+    islands: isOn("now-playing")
+      ? [{ key: "now-playing:playing", plugin: "now-playing", plugin_name: "Now playing", id: "playing", name: "Now playing", description: "", when: "While something plays", priority: 60, on: restPrefs.on, shipped: NP_SHIPPED, custom: restPrefs.custom }]
+      : [],
+  });
+  C.rest_set_mine = ({ layout }) => {
+    rest.mine = { left: layout.left ?? null, center: layout.center ?? null, right: layout.right ?? null };
+    rest.edited = true;
+    NADI.emit("rest-changed", null);
+  };
+  C.rest_set_island = ({ on, custom, reset }) => {
+    if (typeof on === "boolean") restPrefs.on = on;
+    if (reset) restPrefs.custom = {};
+    if (custom) restPrefs.custom = custom;
+    NADI.emit("rest-changed", null);
+    mediaEmit();
+  };
+  C.rest_move_island = () => {};
+  // the tiles of the open island (tiles.rs): the plugins' own specs, and what the user chose
+  const TILES = [
+    { id: "now-playing", name: "Now playing", icon: "music", tint: "#c23a7a", sizes: ["small", "wide", "large"], start: "large", idle: "Nothing playing", widget: "" },
+    { id: "claude", name: "Claude", icon: "sparkle", tint: "#e8963c", sizes: ["small", "wide"], idle: "all quiet", widget: "" },
+    { id: "downloads", name: "Downloads", icon: "download", tint: "#4f8ff0", sizes: ["small", "wide"], idle: "none right now", widget: "" },
+    { id: "games", name: "Games", icon: "gamepad", tint: "#3ea66f", sizes: ["small", "wide"], idle: "no game running", widget: "" },
+    { id: "work", name: "Work", icon: "code", tint: "#6d6d78", sizes: ["small", "wide"], idle: "not working", widget: "" },
+    { id: "ics-calendar", name: "Today", icon: "calendar", tint: "#4f8ff0", sizes: ["small", "wide"], start: "wide", idle: "No events", widget: "", look: "date" },
+    { id: "system-meters", name: "System", icon: "sliders", tint: "#5ac8e6", sizes: ["small", "wide"], start: "wide", idle: "Right now", widget: "rings" },
+  ];
+  const tileLayout = { positions: {}, sizes: {}, removed: [], center: false, gap: null };
+  C.tiles_get = () => ({ tiles: TILES.filter((t) => isOn(t.id)), layout: tileLayout });
+  C.tiles_set = ({ layout }) => {
+    Object.assign(tileLayout, { positions: layout.positions || {}, sizes: layout.sizes || {}, removed: layout.removed || [], center: !!layout.center, gap: layout.gap ?? null });
+    NADI.emit("tiles-changed", null);
+  };
+  C.plugin_pills = () => ({ pills: [W.npPill?.(), isOn("work") ? W.workPillNow : null, isOn("games") ? W.gamePill() : null].filter(Boolean), rings: isOn("claude-usage") ? { "claude-usage": cuRings() } : {} });
   // the script of a face: the demo carries a copy (see sync.ps1)
   C.plugin_face = ({ id }) => fetch(`demo/faces/${id}.js`).then((r) => (r.ok ? r.text() : Promise.reject(new Error("no such face"))));
   C.plugin_set = ({ id, on }) => {
@@ -831,12 +943,21 @@
       NADI.emit("plugin-surface", { plugin: "system-meters", ...smSurface() });
       NADI.emit("plugin-rings", { plugin: "system-meters", rings: on ? smRings() : [] });
     }
+    if (id === "claude") cuEmit();
     NADI.emit("plugins-changed", null);
   };
   // how the user arranged the head (the app keeps it in a file)
   C.head_layout_get = () => W.headLayout ?? null;
   C.head_layout_set = ({ layout }) => {
     W.headLayout = layout ?? null;
+    NADI.emit("head-layout-changed", null);
+  };
+  // what widgets the island has (it posts them; the settings window arranges them)
+  C.head_catalog_get = () => W.headCatalog ?? null;
+  C.head_catalog_set = ({ catalog }) => {
+    if (W.headCatalog === catalog) return;
+    W.headCatalog = catalog;
+    NADI.emit("head-catalog-changed", null);
   };
   C.plugin_value = ({ id, key, value }) => info(id)?.settings?.find((x) => x.key === key)?.set(value);
   C.plugin_mute = () => {};
@@ -897,7 +1018,7 @@
     if (!isOn("system-meters")) return { widgets: {}, pane: null };
     const bars = SM.map(([l, k, c]) => ({ label: l, part: sys[k] / 100, color: smTone(sys[k], c), text: "" }));
     const wide = SM.map(([l, k, c]) => ({ label: l, part: sys[k] / 100, color: smTone(sys[k], c), text: `${Math.round(sys[k])}%` }));
-    const tip = [{ text: "System", kind: "title" }, { bars: wide }, { text: `Memory ${((sys.ram / 100) * 32).toFixed(1)} of 32.0 GB`, kind: "muted" }];
+    const tip = [{ bars: wide }];
     return { widgets: { bars: { blocks: [{ bars }], tip } }, pane: null };
   }
   function smRings() {
@@ -908,7 +1029,7 @@
     NADI.emit("plugin-surface", { plugin: "system-meters", ...smSurface() });
     NADI.emit("plugin-rings", { plugin: "system-meters", rings: smRings() });
   }, 2000);
-  C.plugin_surface = () => ({ ...(isOn("ics-calendar") ? { "ics-calendar": calSurface(false) } : {}), ...(isOn("system-meters") ? { "system-meters": smSurface() } : {}) });
+  C.plugin_surface = () => ({ ...(isOn("ics-calendar") ? { "ics-calendar": calSurface(false) } : {}), ...(isOn("system-meters") ? { "system-meters": smSurface() } : {}), ...(isOn("claude-usage") ? { "claude-usage": cuSurface() } : {}), ...(isOn("now-playing") ? { "now-playing": npSurface(npSnaps) } : {}) });
   function calAct(kind, a) {
     const today = calDay(new Date());
     if (kind === "widget") {
@@ -940,13 +1061,12 @@
   C.plugin_call = ({ id, cmd, args }) => {
     const a = args || {};
     if (id === "ics-calendar" && (cmd === "widget" || cmd === "pane")) return calAct(cmd, a);
+    if (id === "page-reader" && cmd.startsWith("press:")) return C.click_page_button({ label: cmd.slice("press:".length) });
     switch (`${id}.${cmd}`) {
-      case "games.stats": return C.get_game_stats({ pids: a.pids });
       case "downloads.click": return C.download_item_click({ id: a.id });
-      case "claude-code.dismiss": return C.llm_dismiss({ id: a.id });
-      case "page-reader.press": return C.click_page_button({ label: a.label });
-      case "page-reader.image": return C.page_image({ id: a.id });
+      case "claude-sessions.dismiss": return C.llm_dismiss({ id: a.id });
       case "now-playing.toggle": return C.media_play_pause({ source: npSnaps[0]?.source });
+      case "now-playing.widget": return a.id === "playpause" ? C.media_play_pause({ source: npSnaps[0]?.source }) : null;
       case "now-playing.prev": return C.media_previous({ source: npSnaps[0]?.source });
       case "now-playing.back": return C.media_seek_by({ deltaSeconds: -5, source: npSnaps[0]?.source });
       case "now-playing.fwd": return C.media_seek_by({ deltaSeconds: 5, source: npSnaps[0]?.source });
@@ -964,10 +1084,11 @@
       case "now-playing.seek": return C.media_seek({ positionSeconds: a.position_seconds, source: a.source });
       case "now-playing.seek_by": return C.media_seek_by({ deltaSeconds: a.delta_seconds, source: a.source });
       case "now-playing.set_rate": return C.media_set_rate({ rate: a.rate, source: a.source });
-      case "claude-code.usage_login": return true;
-      case "claude-code.usage_finish": return true;
-      case "claude-code.usage_state": return C.get_usage();
-      case "claude-code.usage_refresh": C.refresh_usage(); return true;
+      case "claude-sessions.focus": return C.llm_dismiss();
+      case "claude-usage.usage_login": return true;
+      case "claude-usage.usage_finish": return true;
+      case "claude-usage.widget":
+      case "claude-usage.ring": return cuEmit();
       case "time.preview": return C.time_preview();
       default: return null;
     }
@@ -976,15 +1097,14 @@
   C.get_activity = () => {
     const a = legacyActivity();
     const cards = {};
-    if (isOn("games") && a.games.length) cards.games = a.games;
-    if (isOn("downloads") && a.downloads.length) cards.downloads = a.downloads;
-    if (isOn("claude-code") && a.llm.length) cards["claude-code"] = a.llm;
-    const pages = a.work.filter((w) => w.category === "browsing" && w.browse);
-    if (isOn("page-reader") && pages.length) cards["page-reader"] = pages;
     const plugins = [];
     const np = W.npCard?.();
     if (np) plugins.push(np);
     if (isOn("work")) plugins.push(...W.workCards(a));
+    if (isOn("games")) plugins.push(...W.gameCards());
+    if (isOn("page-reader")) plugins.push(...W.pageCards());
+    if (isOn("claude")) plugins.push(...llmCards());
+    if (isOn("downloads")) plugins.push(...W.downloadCards());
     if (isOn("ics-calendar") && S().calendar_ics_url) {
       const events = cal.filter((e) => e.end_ms >= Date.now() - 3600e3).slice(0, 6);
       const when = (e) => `{when:${e.start_ms}${e.all_day ? ":day" : ""}}`;
@@ -1037,7 +1157,7 @@
     mediaEmit();
     gameEmit();
     workPoll();
-    NADI.emit("usage-tick", usageSnap());
+    cuEmit();
     NADI.emit("calendar-tick", C.get_calendar());
   };
 })();

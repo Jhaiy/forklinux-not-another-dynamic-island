@@ -1,15 +1,7 @@
-//! Which programs are web browsers, and where the Chromium ones keep their history. Plain facts about the PC that more
-//! than one plugin needs (the page reader and the downloads).
+//! Where the Chromium browsers keep their history: a plain fact about the PC that the downloads sensor needs.
 
 use std::path::PathBuf;
 use std::time::SystemTime;
-
-/// by exe path or file name
-pub fn is_browser_exe(exe: &str) -> bool {
-    let file = exe.rsplit(['\\', '/']).next().unwrap_or(exe).to_lowercase();
-    let base = file.strip_suffix(".exe").unwrap_or(&file);
-    matches!(base, "chrome" | "msedge" | "firefox" | "brave" | "opera" | "vivaldi" | "arc")
-}
 
 /// Newest `History` file among a Chromium browser's profiles.
 pub(crate) fn history_path(exe: &str) -> Option<PathBuf> {
@@ -42,16 +34,4 @@ pub(crate) fn history_path(exe: &str) -> Option<PathBuf> {
         }
     }
     best.map(|(_, p)| p)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn knows_a_browser_by_its_file() {
-        assert!(is_browser_exe(r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"));
-        assert!(is_browser_exe("Chrome.EXE"));
-        assert!(!is_browser_exe(r"C:\Windows\explorer.exe"));
-    }
 }

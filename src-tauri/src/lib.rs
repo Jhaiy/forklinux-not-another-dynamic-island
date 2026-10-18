@@ -1,27 +1,35 @@
 mod browsers;
 mod audio;
 mod background;
+mod browsersensor;
 mod calendar;
+mod claudesensor;
+mod downloadsensor;
 mod exeinfo;
+mod fps;
 mod floats;
 mod modal;
 mod notifysensor;
 mod pluginrun;
 mod repo;
+mod rest;
+mod tiles;
 mod focus;
 mod formats;
 mod gpu;
 mod head;
 mod media;
 mod notify;
-mod builtin;
-mod native;
+mod plugincalls;
 mod permissions;
 mod plugins;
 mod pluginwasm;
 mod scan;
+mod seal;
 mod settings;
+mod settingswin;
 mod stats;
+mod usage;
 mod winutil;
 
 use serde::Serialize;
@@ -29,7 +37,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::{
-    tray::TrayIconBuilder, Emitter, LogicalSize, Manager, PhysicalPosition, WebviewWindow,
+    tray::TrayIconBuilder, Emitter, Manager, PhysicalPosition, WebviewWindow,
 };
 
 const EDGE_TRIGGER_PX: i32 = 3;
@@ -60,15 +68,14 @@ const BRIEF_SIZE: (f64, f64) = (IDLE_SIZE.0, 40.0);
 // (this is only the default)
 const HUB_WIDTH: f64 = 420.0;
 const HUB_MIN_H: f64 = 150.0;
-const HUB_MAX_H: f64 = 520.0;
-/// edit mode has no cards, but a tray, and rows at the top and at the bottom: it may be taller
-const HUB_EDIT_MAX_H: f64 = 720.0;
+/// (the tiles are rows of squares: it may be tall; what does not fit scrolls inside the hub)
+const HUB_MAX_H: f64 = 720.0;
 const HUB_SIZE: (f64, f64) = (HUB_WIDTH, HUB_MAX_H);
 
 #[derive(PartialEq, Clone, Copy)]
 enum PillView {
     Idle,
-    /// a pill a plugin offers (see native.rs): its name for the page, and its size at the standard width
+    /// a pill a plugin offers (see plugins.rs): its name for the page, and its size at the standard width
     Plugin(&'static str, f64, f64, bool),
     Notification,
     /// a Claude Code session that needs you or finished: a compact pill from the notification queue
@@ -311,9 +318,8 @@ fn toggle_pin(window: WebviewWindow) {
 }
 
 #[tauri::command]
-fn set_hub_height(window: WebviewWindow, h: f64, edit: Option<bool>) {
-    let max = if edit == Some(true) { HUB_EDIT_MAX_H } else { HUB_MAX_H };
-    let h = h.clamp(HUB_MIN_H, max).round() as u32;
+fn set_hub_height(window: WebviewWindow, h: f64) {
+    let h = h.clamp(HUB_MIN_H, HUB_MAX_H).round() as u32;
     window.state::<Arc<IslandState>>().hub_height.store(h, Ordering::Relaxed);
 }
 
@@ -1107,8 +1113,11 @@ pub fn run() {
             plugins::plugin_set,
             head::head_layout_get,
             head::head_layout_set,
-            native::plugin_call,
-            native::plugin_pills,
+            head::head_catalog_get,
+            head::head_catalog_set,
+            plugincalls::plugin_call,
+            plugins::browser_get,
+            plugincalls::plugin_pills,
             plugins::plugin_value,
             plugins::plugin_mute,
             plugins::plugin_dnd,
@@ -1134,16 +1143,28 @@ pub fn run() {
             floats::float_monitors,
             floats::float_typing,
             floats::float_backdrop,
+            tiles::tiles_get,
+            tiles::tiles_set,
+            rest::rest_get,
+            rest::rest_set_mine,
+            rest::rest_set_island,
+            rest::rest_move_island,
+            settingswin::open_settings,
+            settingswin::settings_window,
             modal::modal_open,
             modal::modal_close,
             modal::modal_result,
             repo::repo_look,
+            repo::repo_latest,
+            repo::repo_open,
+            repo::repo_remove,
+            plugins::plugin_remove,
             repo::repo_install,
             focus::focus_source,
             toggle_pin,
             settings::get_settings,
             calendar::get_calendar,
-            native::get_activity,
+            plugincalls::get_activity,
             gpu::get_gpu_pct,
             stats::get_sys_stats,
             settings::save_settings,
@@ -1198,15 +1219,12 @@ pub fn run() {
     floats::spawn(app.handle().clone(), window.state::<Arc<IslandState>>().inner().clone());
     plugins::spawn(app.handle().clone(), window.state::<Arc<IslandState>>().inner().clone());
     notifysensor::spawn(window.state::<Arc<IslandState>>().inner().clone());
-    // screenshot aid: `DI_OPEN_SETTINGS=1` opens the hub on its settings pane shortly after launch
+    // screenshot aid: `DI_OPEN_SETTINGS=1` opens the settings window shortly after launch
     if std::env::var_os("DI_OPEN_SETTINGS").is_some() {
-        let w = window.clone();
+        let app = app.handle().clone();
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_secs(5));
-            let state = w.state::<Arc<IslandState>>();
-            let _ = w.emit("open-settings", ());
-            state.hub_open.store(true, Ordering::Relaxed);
-            state.shown.store(true, Ordering::Relaxed);
+            settingswin::open(&app, None);
         });
     }
 
@@ -1287,7 +1305,7 @@ pub fn run() {
                     std::thread::sleep(Duration::from_secs(20));
                     let state = w.state::<Arc<IslandState>>();
                     if std::env::var("DI_DEMO_HUB").as_deref() == Ok("settings") {
-                        let _ = w.emit("open-settings", ());
+                        settingswin::open(w.app_handle(), None);
                     }
                     state.hub_open.store(true, Ordering::Relaxed);
                     state.shown.store(true, Ordering::Relaxed);
@@ -1325,12 +1343,7 @@ pub fn run() {
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "quit" => app.exit(0),
                     "open_hub" => open_hub_from_tray(app),
-                    "settings" => {
-                        // emit before opening so the frontend knows which pane
-                        // to show by the time the hub view arrives
-                        let _ = app.emit("open-settings", ());
-                        open_hub_from_tray(app);
-                    }
+                    "settings" => settingswin::open(app, None),
                     "show" => {
                         if let Some(w) = app.get_webview_window("island") {
                             w.state::<Arc<IslandState>>().shown.store(true, Ordering::Relaxed);

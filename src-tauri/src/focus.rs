@@ -4,14 +4,12 @@
 
 use crate::winutil::exe_path_for_pid;
 use std::collections::HashMap;
-use windows::core::w;
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
 use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
-use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, EnumWindows, GetForegroundWindow, GetWindow, GetWindowLongW, GetWindowTextW,
     GetWindowThreadProcessId, IsIconic, IsWindowVisible, SetForegroundWindow, ShowWindow, GWL_EXSTYLE,
-    GW_OWNER, SW_RESTORE, SW_SHOWNORMAL, WS_EX_TOOLWINDOW,
+    GW_OWNER, SW_RESTORE, WS_EX_TOOLWINDOW,
 };
 
 struct Cand {
@@ -142,14 +140,3 @@ pub fn focus_source(exe_path: Option<String>, title_hint: Option<String>, source
     }
 }
 
-/// Focus an app's window by exe file name, or -- when it only lives in the
-/// tray -- open it through its URL scheme.
-pub fn focus_or_open(exe_name: &str, url: windows::core::PCWSTR) {
-    let found = candidates().iter().find(|c| c.exe.ends_with(exe_name)).map(|c| c.hwnd);
-    match found {
-        Some(h) => raise(h),
-        None => unsafe {
-            ShellExecuteW(None, w!("open"), url, None, None, SW_SHOWNORMAL);
-        },
-    }
-}

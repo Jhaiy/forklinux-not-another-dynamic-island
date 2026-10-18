@@ -47,8 +47,8 @@ It is Windows-only for now. The goal is to stay light: it should never make the 
   shortly before it starts; a module can bring events too.
 - **The head.** The top of the expanded island is rows of **widgets** that plugins bring: the eyes, the date and the time,
   the CPU, memory and GPU as three thin bars, the Claude limits as two labelled bars (each also offered as rings). Every row has a left, a center and a right place (the center is always at
-  the dead center), and when the widgets do not fit the head grows another row. Edit mode (the pencil in the settings tabs) lets you
-  drag a widget to any place of any row at the top or at the bottom of the island, or off the island to put it back in the tray, which lists every
+  the dead center), and when the widgets do not fit the head grows another row. Settings > Expanded Island (from the tray menu) is where you
+  drag a widget to any place of any row at the top or at the bottom of the island, or onto the tray to take it out; the tray lists every
   widget the plugins offer (it scrolls, folds by plugin and has a search). The place that a widget
   gives up springs shut, and the others spring into it.
 - **A blank slate.** A new install has every plugin off; the expanded island says so and points to the plugin list.
@@ -73,10 +73,9 @@ It is Windows-only for now. The goal is to stay light: it should never make the 
   a card, a **pill** on the collapsed island, **rings** in the hub, **widgets** for the head and a **pane**, buttons, banners, events for the calendar. It has no
   network, a time budget for each call and a memory cap, and a module that keeps failing is switched off. The island draws
   everything from a few building blocks, so a plugin cannot make it lag. The *Time* and *Calendar*
-  plugins are written this way and come from the nadi-plugins repository (the island itself starts blank); a few others
-  (games, the page reader, downloads, Claude Code) are written in Rust,
-  because they need what a sandbox must not hand out (the process list, performance counters, files and the login of other
-  programs). Settings > Plugins lists them all the same way: what each one asks to see before you switch it on, its own
+  plugins are written this way and come from the nadi-plugins repository (the island itself starts blank), and so do the
+  games, downloads, work, now playing and the like; Claude Code, Claude usage and the page reader are modules too:
+  the island reads what they need from other programs (their files, the browser extension) and tells the module, which never touches them. Settings > Plugins lists them all the same way: what each one asks to see before you switch it on, its own
   settings, a mute for its banners, and Do not disturb. Banners wait by priority. Examples (weather, an audio meter, a
   game clock, a busy meter) are in nadi-plugins too, to learn from. The format is in [PLUGINS.md](PLUGINS.md).
 
@@ -113,17 +112,15 @@ The installer is written to `src-tauri/target/release/bundle/nsis/`. Tests: `car
 (a few tests that need real apps running are marked `#[ignore]`).
 
 Debug aids, set as environment variables before starting the exe: `DI_OPEN_HUB=1` opens the hub,
-`DI_OPEN_SETTINGS=1` opens the settings pane, `DI_DEMO_DOWNLOADS=1` shows fake downloads.
+`DI_OPEN_SETTINGS=1` opens the settings window.
 
 ## Where things live
 
 - `ui/` is the frontend: `index.html`, `main.js`, `style.css` for the compact island and `hub.css` for
   the hub. There is no build step.
 - `src-tauri/src/` is the backend. `lib.rs` has the window state machine (reveal, hide, springs, resize);
-  the core is `calendar` (the store of events), `media` and `audio` (the sensors), `notify`, `floats`, `stats`, `gpu`,
-  `settings`, and `plugins`, `pluginwasm`, `native` and `repo` (the plugin host, and the installer from GitHub). The plugins written in Rust are
-  in `builtin/` (`games`, `work`, `pages`, `downloads`, `claude_code`, `now_playing`, `toasts`, `eyes`, `sound_light`, `system_meters`) with their
-  faces in `ui/plugins/` (the head's rows and widgets are `ui/head.js`, and `head.rs` keeps how you arranged them); what modules bring (widgets and panes) is drawn by `ui/plugins/surface.js`. What the island draws for any plugin is `ui/pluginui.js`; see [PLUGINS.md](PLUGINS.md).
+  the core is `calendar` (the store of events), `media` and `audio` (the sensors), `notify`, `floats`, `stats`, `gpu`, `usage` and `fps` (what one program uses), `downloadsensor`,
+  `settings`, `browsersensor` and `claudesensor` (what the browser extension and Claude Code leave to read), and `plugins`, `pluginwasm`, `plugincalls` and `repo` (the plugin host, and the installer from GitHub). Every plugin is a folder (see nadi-plugins); the head's rows and widgets are `ui/head.js` (and `head.rs` keeps how you arranged them); what modules bring (widgets and panes) is drawn by `ui/plugins/surface.js`. What the island draws for any plugin is `ui/pluginui.js`; see [PLUGINS.md](PLUGINS.md).
 - `scripts/gen_icons.py` regenerates `src-tauri/icons/` (standard library only).
 - Settings are stored in `%APPDATA%\NADI\settings.json`, and what each plugin has (on or off, its settings) in
   `%APPDATA%\NADI\plugins.json`.

@@ -83,3 +83,5 @@
 .demo-note { text-align: center; color: var(--mute); font-size: 12.5px; margin-top: 8px; }
 
 .brw .page { flex: 1; min-height: 0; } .brw .page h5 { margin: 14px 0 4px; font-size: 13.5px; }
+
+.setframe { flex: 1; width: 100%; border: 0; display: block; background: #202024; }

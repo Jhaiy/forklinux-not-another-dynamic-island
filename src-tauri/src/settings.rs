@@ -54,6 +54,12 @@ pub struct Settings {
     pub bg_dim: u64,
     /// 0..100 -- how strongly (and how far) the glow around the brief-show views shines, 0 = off
     pub glow_intensity: u64,
+    /// px, 0..28 -- how round the corners of the tiles and of the cards are
+    pub card_radius: u64,
+    /// px, 0..40 -- how round the open island is (and the banner that comes down for a message)
+    pub hub_radius: u64,
+    /// px, 0..40 -- how round the resting island is (and the pills of the plugins); 40 is full: as round as it can be
+    pub rest_radius: u64,
     /// hovering the top edge does nothing while a fullscreen / borderless-fullscreen app is in front
     pub fullscreen_guard: bool,
     /// the key that lifts the guard while it is held: "alt" or "ctrl"
@@ -81,6 +87,9 @@ impl Default for Settings {
             bg_hub: String::new(),
             bg_dim: 50,
             glow_intensity: 70,
+            card_radius: 18,
+            hub_radius: 28,
+            rest_radius: 20,
             fullscreen_guard: true,
             guard_key: "alt".to_string(),
         }
@@ -149,11 +158,6 @@ pub fn load() -> Settings {
     s
 }
 
-/// the settings file as it was written, whatever it holds (see native.rs: a native plugin adopts its old fields)
-pub(crate) fn raw() -> Option<serde_json::Value> {
-    serde_json::from_str(&std::fs::read_to_string(settings_path()?).ok()?).ok()
-}
-
 pub(crate) fn save_to_disk(settings: &Settings) {
     let Some(path) = settings_path() else { return };
     if let Some(dir) = path.parent() {
@@ -217,6 +221,8 @@ pub fn save_settings(window: WebviewWindow, settings: Settings) {
 
     save_to_disk(&settings);
     *state.settings.lock().unwrap() = settings;
+    // (the settings are a window of their own: the island follows what was changed there)
+    let _ = tauri::Emitter::emit(&window, "settings-changed", ());
 }
 
 #[cfg(test)]

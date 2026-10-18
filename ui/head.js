@@ -11,6 +11,8 @@
 //   place. A plugin that is off has no widgets.
 
 import { el, host, hooks, invoke, li, listen } from "./kit.js";
+import { picture } from "./sample.js";
+import { makeTray, openGroup } from "./tray.js";
 
 const GAP = 10; // between two widgets of a place
 const SECT = 18; // between two places of a row
@@ -30,6 +32,9 @@ let work = null; // the layout being arranged (edit mode)
 let editing = false;
 let root = null; // the rows at the top of the island
 let foot = null; // the rows at the bottom of it
+let stage = null; // the editor, when the rows are edited in the settings window
+let trayHost = null; // where its tray is put (beside the stage)
+let barHost = null; // and its hint and its Reset button (under it)
 let seq = 0;
 const listeners = new Set();
 
@@ -47,6 +52,7 @@ export function register({ id, plugin = null, name, place = "right", rank = 50, 
 	if (!old) w.width = width;
 	widgets.set(id, w);
 	schedule();
+	changed();
 	return w;
 }
 
@@ -56,6 +62,7 @@ export function setHidden(id, hidden) {
 	if (!w || w.hidden === hidden) return;
 	w.hidden = hidden;
 	schedule();
+	changed();
 }
 
 const isAvailable = (w) => !!w && !w.hidden && (w.plugin == null || enabled.has(w.plugin));
@@ -65,6 +72,30 @@ const wd = (id) => {
 };
 
 export const isEnabled = (plugin) => enabled.has(plugin);
+
+// ---- the resting island (rest.js) takes widgets from here: the element of one, and what changes about them ----
+const changeCbs = new Set();
+const changed = () => {
+	for (const cb of changeCbs) cb();
+};
+/** called when a widget is added, shown or hidden, or a plugin is switched */
+export const onChange = (cb) => changeCbs.add(cb);
+// the widgets that the resting island has in its sections now: the head leaves them where they are, when it lays itself out
+let taken = new Set();
+/** the ids of the widgets the resting island shows now (none, once the island is not at rest: they come back to the head) */
+export function take(ids) {
+	const next = new Set(ids);
+	const gave = [...taken].some((id) => !next.has(id));
+	taken = next;
+	if (gave) schedule();
+}
+/** the element of a widget that is on show (one element: wherever it is put, it is there), or null */
+export function widgetNode(id) {
+	const w = widgets.get(id);
+	return w && isAvailable(w) ? node(w) : null;
+}
+/** what the widgets that are on offer are, for a page that lets the user choose (`interactive`: it is a button) */
+export const widgetList = () => [...widgets.values()].filter(isAvailable).map((w) => ({ id: w.id, name: w.name, plugin: w.plugin, interactive: !!w.interactive }));
 export const enabledCount = () => enabled.size;
 /** called when the set of plugins that are on changes */
 export function onEnabled(cb) {
@@ -80,6 +111,7 @@ export async function refreshEnabled() {
 		pluginNames = new Map((listing?.plugins || []).map((p) => [p.id, p.name]));
 		if (!same) for (const cb of listeners) cb(enabled);
 		schedule();
+		changed();
 	} catch (_) {}
 }
 
@@ -230,14 +262,17 @@ const measure = new ResizeObserver((entries) => {
 			changed = true;
 		}
 	}
-	if (changed) schedule();
+	if (changed) {
+		schedule();
+		publishSoon();
+	}
 });
 
 /** A new row, at the end of the top of the island or of its bottom. */
 function addButton(area) {
 	const add = el("button", "hh-add");
 	add.type = "button";
-	add.innerHTML = `${li("plus")}Add a row`;
+	add.innerHTML = `${li("plus")}Add a Row`;
 	add.addEventListener("mousedown", (e) => e.stopPropagation());
 	add.addEventListener("click", () => {
 		const at = area === "b" ? work.rows.length : work.rows.findLastIndex((r) => r.a !== "b") + 1;
@@ -247,177 +282,42 @@ function addButton(area) {
 	return add;
 }
 
-// the tray: what the plugins offer, by plugin. A group folds (the first two start open), a search cuts it down, and what is
-// in a place already can be hidden. It keeps one height and scrolls inside itself, however many widgets there are.
-const trayFolded = new Map(); // plugin id -> true/false, once the user has folded or opened it
-let trayQuery = "";
-let trayScroll = 0;
-let trayHideUsed = false;
-try {
-	trayHideUsed = localStorage.getItem("nadi.trayHideUsed") === "1";
-	for (const k of JSON.parse(localStorage.getItem("nadi.trayFolded") || "[]")) trayFolded.set(k[0], k[1]);
-} catch (_) {}
-const keepTray = () => {
-	try {
-		localStorage.setItem("nadi.trayHideUsed", trayHideUsed ? "1" : "0");
-		localStorage.setItem("nadi.trayFolded", JSON.stringify([...trayFolded]));
-	} catch (_) {}
-};
-
-/** `text` with the part that `q` matches in bold */
-function marked(text, q) {
-	const span = el("span");
-	const at = q ? text.toLowerCase().indexOf(q) : -1;
-	if (at < 0) {
-		span.textContent = text;
-		return span;
-	}
-	span.append(document.createTextNode(text.slice(0, at)), el("b", null, text.slice(at, at + q.length)), document.createTextNode(text.slice(at + q.length)));
-	return span;
-}
-
-function tray() {
-	const box = el("div", "hh-tray");
-	const top = el("div", "hh-tray-h");
-	top.append(el("span", "hh-tray-l", "Widgets"));
-	const search = el("label", "hh-search");
-	search.innerHTML = li("search");
-	const input = el("input");
-	input.type = "search";
-	input.placeholder = "Search widgets";
-	input.value = trayQuery;
-	input.setAttribute("aria-label", "Search widgets");
-	input.addEventListener("input", () => {
-		trayQuery = input.value;
-		fill();
-	});
-	// (typing is typing: nothing here picks up a widget, or closes the island)
-	input.addEventListener("mousedown", (e) => e.stopPropagation());
-	search.append(input);
-	const hide = el("button", "hh-switch");
-	hide.type = "button";
-	hide.setAttribute("aria-pressed", String(trayHideUsed));
-	hide.append(el("i"), document.createTextNode("Hide in use"));
-	hide.addEventListener("click", () => {
-		trayHideUsed = !trayHideUsed;
-		hide.setAttribute("aria-pressed", String(trayHideUsed));
-		keepTray();
-		fill();
-	});
-	top.append(search, hide);
-	const body = el("div", "hh-tray-body");
-	const fade = () => box.classList.toggle("hh-more", body.scrollHeight - body.clientHeight - body.scrollTop > 4);
-	body.addEventListener(
-		"scroll",
-		() => {
-			trayScroll = body.scrollTop;
-			fade();
-		},
-		{ passive: true },
-	);
-	box.append(top, body);
-
-	function fill() {
-		const used = new Set(work.rows.flatMap((r) => [...r.l, ...r.c, ...r.r]));
-		const q = trayQuery.trim().toLowerCase();
-		const groups = new Map(); // plugin id -> { name, all, shown }
-		for (const w of [...widgets.values()].filter(isAvailable).sort(byRank)) {
-			const key = w.plugin || "";
-			if (!groups.has(key)) groups.set(key, { name: pluginNames.get(key) || "Other", all: 0, shown: [] });
-			const g = groups.get(key);
-			g.all++;
-			if (q && !w.name.toLowerCase().includes(q) && !g.name.toLowerCase().includes(q)) continue;
-			if (trayHideUsed && used.has(w.id)) continue;
-			g.shown.push(w);
-		}
-		const out = [];
-		let n = 0;
-		for (const [key, g] of groups) {
-			const index = n++;
-			if (!g.shown.length) continue;
-			// (a search shows what it found: every group that has something is open)
-			const open = q ? true : !(trayFolded.has(key) ? trayFolded.get(key) : index >= 2);
-			const head = el("button", `hh-tray-gh${open ? " open" : ""}`);
-			head.type = "button";
-			head.setAttribute("aria-expanded", String(open));
-			head.innerHTML = li("chevron");
-			head.append(el("span", "hh-tray-n", g.name), el("span", "hh-tray-c", g.shown.length === g.all ? String(g.all) : `${g.shown.length} of ${g.all}`));
-			head.addEventListener("click", () => {
-				trayFolded.set(key, open);
-				keepTray();
-				fill();
-			});
-			out.push(head);
-			if (!open) continue;
-			const tiles = el("div", "hh-tiles");
-			for (const w of g.shown) tiles.append(tile(w, used.has(w.id), q));
-			out.push(tiles);
-		}
-		if (!out.length) out.push(el("div", "hh-tray-none", groups.size ? "No widget has that name" : "No widgets yet: turn a plugin on"));
-		body.replaceChildren(...out);
-		fade();
-	}
-	fill();
-	// (the head is laid out again at each move: the tray keeps where it was scrolled to)
-	requestAnimationFrame(() => {
-		body.scrollTop = trayScroll;
-		fade();
-	});
-	return box;
-}
-
-function tile(w, inUse, q) {
-	const t = el("button", `hh-tile${inUse ? " used" : ""}`);
-	t.type = "button";
-	t.dataset.id = w.id;
-	t.dataset.plugin = w.plugin || "";
-	t.setAttribute("aria-label", inUse ? `${w.name}, in use` : `Add ${w.name}`);
-	let pic = null;
-	try {
-		pic = w.preview?.() || null;
-	} catch (_) {}
-	if (pic) {
-		const pv = el("span", "hh-tile-pv");
-		pv.append(pic);
-		t.append(pv);
-	}
-	const nm = el("span", "hh-tile-nm");
-	nm.append(marked(w.name, q));
-	t.append(nm);
-	if (inUse) t.append(el("span", "hh-tile-tag", "In use"));
-	// (pressing it, with no mouse to drag: it goes to its own place of the first row, and the row spills if it must)
-	t.addEventListener("click", () => {
-		if (inUse || justDragged) return;
-		place(w.id, 0, w.place);
-		schedule();
-	});
-	return t;
-}
-
-// the tools of edit mode: add a row, the tray of widgets, and the buttons
+// the tools of edit mode: a row to add at the top of the stage, and, beside and under it, the tray of widgets and the
+// button that puts it all back
 let toolsNode = null;
+let trayNode = null;
 function tools() {
 	if (!toolsNode) {
 		toolsNode = el("div", "hh-tools");
 		toolsNode.addEventListener("mousedown", (e) => e.stopPropagation());
+		trayNode = makeTray({
+			list: () => [...widgets.values()].filter(isAvailable).sort(byRank),
+			used: () => new Set(work.rows.flatMap((r) => [...r.l, ...r.c, ...r.r])),
+			plugins: () => pluginNames,
+			// (pressing a tile, with no mouse to drag: it goes to its own place of the first row, and the row spills if it must)
+			onPress: (id) => {
+				place(id, 0, widgets.get(id).place);
+				commit();
+				schedule();
+			},
+			wasJustDragged: () => justDragged,
+		});
 	}
-	const add = addButton("t");
+	trayNode.fill();
 	const bar = el("div", "hh-bar");
-	bar.append(el("p", null, "Drag a widget anywhere, or off the island to put it back in the tray"));
-	const buttons = el("div");
+	bar.append(el("p", null, "Drag a widget anywhere, or onto the tray to take it out"));
 	const reset = el("button", "hh-btn", "Reset");
 	reset.type = "button";
 	reset.addEventListener("click", () => {
-		work = { rows: defaults(), removed: [] };
-		work.rows = fit(work.rows);
+		work = { rows: fit(defaults()), removed: [] };
+		saved = { edited: false, rows: [], removed: [] };
+		invoke("head_layout_set", { layout: null }).catch(() => {});
 		schedule();
 	});
-	const done = el("button", "hh-btn go", "Done");
-	done.type = "button";
-	done.addEventListener("click", () => stopEdit());
-	buttons.append(reset, done);
-	bar.append(buttons);
-	toolsNode.replaceChildren(add, tray(), bar);
+	bar.append(reset);
+	toolsNode.replaceChildren(addButton("t"));
+	trayHost?.replaceChildren(trayNode);
+	barHost?.replaceChildren(bar);
 	return toolsNode;
 }
 
@@ -462,7 +362,7 @@ function render(from, before = snapshot()) {
 	const rows = resolve();
 	if (editing && !lifted()) work.rows = copyRows(rows);
 	for (const e of [root, foot]) e?.classList.toggle("hh-edit", editing);
-	document.getElementById("hub").classList.toggle("hh-editing", editing);
+	stage?.classList.toggle("hh-editing", editing);
 	const outTop = [];
 	const outFoot = [];
 	const W = rowWidth();
@@ -483,7 +383,7 @@ function render(from, before = snapshot()) {
 			if (editing) z.append(el("i", "hh-frame"));
 			for (const id of row[place]) {
 				const w = widgets.get(id);
-				if (w && isAvailable(w)) z.append(node(w));
+				if (w && isAvailable(w) && !taken.has(id)) z.append(node(w));
 			}
 			const filled = row[place].some((id) => wd(id) > 0);
 			z.classList.toggle("hh-empty", !filled);
@@ -493,7 +393,7 @@ function render(from, before = snapshot()) {
 	});
 	if (editing) {
 		outTop.push(tools());
-		outFoot.unshift(el("div", "hh-area-l", "Bottom of the island"));
+		outFoot.unshift(el("div", "hh-area-l", "Bottom of the Island"));
 		outFoot.push(addButton("b"));
 	}
 	root.replaceChildren(...outTop);
@@ -525,9 +425,17 @@ function render(from, before = snapshot()) {
 
 let entering = false;
 
-export function mount(head, bottom) {
+/**
+ * `host`: the settings window's editor, which has a `stage` (the box that a widget in the hand floats over), a `tray` and a
+ * `bar` to put the tray and the Reset button in. The island has none of them.
+ */
+export function mount(head, bottom, host = {}) {
 	root = head;
 	foot = bottom;
+	stage = host.stage || null;
+	trayHost = host.tray || null;
+	barHost = host.bar || null;
+	if (trayHost) trayHost.addEventListener("pointerdown", beginDrag);
 	for (const area of [root, foot]) {
 		if (!area) continue;
 		// (a click on the head's own background collapses the island, as it did; in edit mode it does nothing)
@@ -571,22 +479,25 @@ export function startEdit() {
 	const rows = resolve();
 	work = { rows: copyRows(rows), removed: [...(saved.removed || [])] };
 	editing = true;
-	host.setPane("info");
 	root.classList.add("hh-edit");
 	schedule();
 }
 
-export function stopEdit() {
-	if (!editing) return;
-	const rows = normalize(copyRows(work.rows).filter((r) => !isEmpty(r)));
+/** the arrangement so far is what the island shows from now on (it is told) */
+function commit() {
+	if (!work) return;
 	saved = {
 		edited: true,
-		rows,
+		rows: normalize(copyRows(work.rows).filter((r) => !isEmpty(r))),
 		removed: work.removed,
 	};
+	invoke("head_layout_set", { layout: JSON.stringify(saved) }).catch(() => {});
+}
+
+export function stopEdit() {
+	if (!editing) return;
 	work = null;
 	editing = false;
-	invoke("head_layout_set", { layout: JSON.stringify(saved) }).catch(() => {});
 	schedule();
 }
 
@@ -622,9 +533,9 @@ function beginDrag(e) {
 	window.addEventListener("pointercancel", endDrag);
 }
 
-function hubRect() {
-	return document.getElementById("hub").getBoundingClientRect();
-}
+const stageRect = () => stage.getBoundingClientRect();
+/** is the pointer over the tray? (let go there, a widget is put back in it) */
+const overTray = (e) => !!trayNode && document.elementsFromPoint(e.clientX, e.clientY).includes(trayNode);
 
 function moveDrag(e) {
 	if (!drag || e.pointerId !== drag.pointer) return;
@@ -635,7 +546,6 @@ function moveDrag(e) {
 		const row = d.n.closest(".hh-row");
 		const rect = d.n.getBoundingClientRect();
 		const rowh = row ? getComputedStyle(row).getPropertyValue("--rowh") : "52px";
-		const hub = document.getElementById("hub");
 		const before = snapshot();
 		d.n.classList.add("hh-lift");
 		// (a widget is as tall as its row, and in the hub it has no row: it keeps the size it was picked up with; one out of
@@ -647,22 +557,21 @@ function moveDrag(e) {
 		d.n.style.setProperty("--rowh", rowh);
 		// (the group it came from opens, so that its tile is still there to see)
 		if (d.tray && d.w.plugin != null) {
-			trayFolded.set(d.w.plugin, false);
-			keepTray();
+			openGroup(pluginNames.get(d.w.plugin) || d.w.plugin);
 		}
-		hub.append(d.n);
+		stage.append(d.n);
 		// (what the widget had is given back at once: the others spring into the room)
 		render(undefined, before);
 		try {
 			document.body.setPointerCapture?.(e.pointerId);
 		} catch (_) {}
 	}
-	const hr = hubRect();
+	const hr = stageRect();
 	d.n.style.left = `${e.clientX - hr.left - d.dx}px`;
 	d.n.style.top = `${e.clientY - hr.top - d.dy}px`;
-	// off the island: let go and it is taken out
+	// off the island, or on the tray: let go and it is taken out
 	const M = 12;
-	d.out = e.clientX < hr.left - M || e.clientX > hr.right + M || e.clientY < hr.top - M || e.clientY > hr.bottom + M;
+	d.out = e.clientX < hr.left - M || e.clientX > hr.right + M || e.clientY < hr.top - M || e.clientY > hr.bottom + M || overTray(e);
 	d.n.classList.toggle("hh-out", d.out);
 	for (const z of drawn(".hh-zone.hh-ok, .hh-zone.hh-nope")) z.classList.remove("hh-ok", "hh-nope");
 	d.target = null;
@@ -700,12 +609,13 @@ function endDrag(e) {
 		if (d.out) {
 			if (!d.tray) takeOut(d.w.id);
 		} else if (d.target) place(d.w.id, d.target.row, d.target.place, d.target.index);
+		commit();
 	}
 	if (raf) cancelAnimationFrame(raf);
 	raf = 0;
 	render(held);
-	// (a widget that was taken out is in no place: it is not in the hub's way any more either)
-	if (d.n.parentElement?.id === "hub") d.n.remove();
+	// (a widget that was taken out is in no place: it is not in the stage's way any more either)
+	if (d.n.parentElement === stage) d.n.remove();
 }
 
 /** the rows with the widget at a place (without it anywhere else), for asking whether they fit */
@@ -737,20 +647,85 @@ function takeOut(id) {
 
 // ---------------------------------------------------------------------------------------------------- start
 
-export async function init() {
+async function loadLayout() {
 	try {
 		const text = await invoke("head_layout_get");
+		saved = { edited: false, rows: [], removed: [] };
 		if (text) {
 			const s = JSON.parse(text);
 			if (s && Array.isArray(s.rows)) saved = { edited: !!s.edited, rows: normalize(s.rows.map((r) => mapRow(r))), removed: s.removed || [] };
 		}
 	} catch (_) {}
+	schedule();
+}
+
+// ---- the island tells the settings window what widgets it has (it is the one that makes them), and the editor there
+// draws stand-ins for them: a box as wide as the widget really is, with a picture of what it looks like (see sample.js)
+const WORD_OF = { l: "left", c: "center", r: "right" };
+let publishing = false;
+let publishTimer = 0;
+function publishSoon() {
+	if (!publishing || publishTimer) return;
+	publishTimer = setTimeout(() => {
+		publishTimer = 0;
+		const list = [...widgets.values()].map((w) => ({ id: w.id, plugin: w.plugin, name: w.name, place: WORD_OF[w.place], rank: w.rank, width: w.width, start: w.start, hidden: w.hidden, interactive: !!w.interactive }));
+		invoke("head_catalog_set", { catalog: JSON.stringify(list) }).catch(() => {});
+	}, 600);
+}
+onChange(publishSoon);
+
+function standIn(item) {
+	const box = el("div", "hh-pic");
+	// (exactly as wide as the widget really is, so that the rows fill as they do in the island: a picture that is wider than that
+	// is made smaller to fit)
+	box.style.width = `${item.width}px`;
+	const pic = picture(item);
+	box.append(pic);
+	requestAnimationFrame(() => {
+		const need = pic.scrollWidth;
+		if (need > item.width) pic.style.zoom = String(Math.max(0.3, item.width / need));
+	});
+	box.title = item.name;
+	return box;
+}
+
+/** the widgets the island posted: stand-ins for them (the ones that are not posted any more go) */
+async function loadCatalog() {
+	let list = [];
+	try {
+		list = JSON.parse((await invoke("head_catalog_get")) || "[]");
+	} catch (_) {}
+	const ids = new Set(list.map((i) => i.id));
+	for (const id of [...widgets.keys()]) if (!ids.has(id)) widgets.delete(id);
+	for (const item of list) {
+		const w = register({ id: item.id, plugin: item.plugin, name: item.name, place: item.place, rank: item.rank, width: item.width, interactive: item.interactive, start: item.start, preview: () => picture(item), build: () => standIn(item) });
+		w.width = item.width;
+		w.hidden = !!item.hidden;
+	}
+	schedule();
+}
+
+/** the island's side: it keeps what the user arranged, and tells the settings window what it has */
+export async function init() {
+	publishing = true;
+	await loadLayout();
 	listen("plugins-changed", () => refreshEnabled());
+	listen("head-layout-changed", () => loadLayout());
 	listen("view-tick", (e) => {
 		if (e.payload === "hub") shown();
-		else if (editing) stopEdit();
 	});
-	refreshEnabled();
+	await refreshEnabled();
+	publishSoon();
+}
+
+/** the settings window's side: the editor starts on what the island has posted */
+export async function initEditor() {
+	await loadLayout();
+	await loadCatalog();
+	listen("plugins-changed", () => refreshEnabled());
+	listen("head-catalog-changed", () => loadCatalog());
+	await refreshEnabled();
+	startEdit();
 }
 
 // a ring a plugin adds (see kit.addRing) is a widget of the right side, shown while it has a number
@@ -778,4 +753,4 @@ hooks.ringAdded = (key, ring, plugin, rank, start = true) => {
 	new MutationObserver(() => setHidden(`ring:${key}`, ring.classList.contains("hidden"))).observe(ring, { attributes: true, attributeFilter: ["class"] });
 };
 
-export const head = { register, setHidden, mount, init, shown, startEdit, stopEdit, isEditing, isEnabled, enabledCount, onEnabled, refreshEnabled };
+export const head = { onChange, take, widgetNode, widgetList, register, setHidden, mount, init, initEditor, shown, startEdit, stopEdit, isEditing, isEnabled, enabledCount, onEnabled, refreshEnabled };

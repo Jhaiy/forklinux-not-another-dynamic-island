@@ -34,6 +34,13 @@ pub struct Brief {
     pub look: &'static str,
     /// how long it stays, ms (0 for the usual for its kind)
     pub dwell_ms: u64,
+    /// a plugin's pill: whose it is, a tile in place of the icon, small icons at the right, how it stands ("waiting" or
+    /// "finished") and what pressing it asks of the plugin
+    pub plugin: String,
+    pub tile: Option<crate::plugins::Tile>,
+    pub badges: Vec<crate::plugins::Badge>,
+    pub tone: String,
+    pub press: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -59,7 +66,7 @@ impl Notification {
         if custom > 0 {
             return Duration::from_millis(custom.clamp(1500, 12_000));
         }
-        Duration::from_millis(match self.brief.as_ref().map(|b| b.state) {
+        Duration::from_millis(match self.brief.as_ref().map(|b| if b.tone == "waiting" { "waiting" } else { b.state }) {
             Some("waiting") => 8000,
             Some(_) => 5000,
             None => NOTIF_MS,
@@ -174,7 +181,7 @@ impl NotifState {
     /// the session does not need you any more (you answered): its brief goes away
     pub fn cancel_brief(&mut self, id: &str) {
         self.queue.retain(|n| n.brief.as_ref().map_or(true, |b| b.id != id));
-        if self.current.as_ref().and_then(|n| n.brief.as_ref()).map_or(false, |b| b.id == id && b.state == "waiting") {
+        if self.current.as_ref().and_then(|n| n.brief.as_ref()).map_or(false, |b| b.id == id && (b.state == "waiting" || b.tone == "waiting")) {
             self.dismiss_current();
         }
     }

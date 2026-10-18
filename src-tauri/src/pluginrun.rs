@@ -74,9 +74,25 @@ fn store_path(id: &str) -> Option<PathBuf> {
     Some(crate::settings::data_dir()?.join("plugin-data").join(format!("{id}.json")))
 }
 
-/// What a plugin kept (null when it kept nothing).
+/// What a plugin kept (null when it kept nothing). It is sealed for this Windows user; a file from before that is read as it is.
 pub fn store_of(id: &str) -> Value {
-    store_path(id).and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null)
+    let Some(bytes) = store_path(id).and_then(|p| std::fs::read(p).ok()) else { return legacy(id) };
+    let plain = crate::seal::unprotect(&bytes).unwrap_or(bytes);
+    serde_json::from_slice(&plain).unwrap_or(Value::Null)
+}
+
+/// The sign-in the usage rings had when they were a part of the app (`claude-login.bin`, sealed for this Windows user) is the one
+/// the plugin that took them over starts with, so nobody signs in twice. Once the plugin keeps something, this is not looked at.
+fn legacy(id: &str) -> Value {
+    if id != "claude-usage" {
+        return Value::Null;
+    }
+    let Some(path) = crate::settings::data_dir().map(|d| d.join("claude-login.bin")) else { return Value::Null };
+    let Some(plain) = std::fs::read(path).ok().and_then(|b| crate::seal::unprotect(&b)) else { return Value::Null };
+    match serde_json::from_slice::<Value>(&plain) {
+        Ok(login) if login["access"].is_string() => json!({ "login": login }),
+        _ => Value::Null,
+    }
 }
 
 /// Keep this for a plugin (refused when it is more than it may keep).
@@ -89,8 +105,66 @@ pub fn keep(id: &str, value: &Value) {
         if let Some(d) = p.parent() {
             let _ = std::fs::create_dir_all(d);
         }
-        let _ = std::fs::write(p, text);
+        // (written whole, then moved into place: a crash never leaves half of it)
+        let Some(sealed) = crate::seal::protect(text.as_bytes()) else { return };
+        let tmp = p.with_extension("tmp");
+        if std::fs::write(&tmp, sealed).is_ok() {
+            let _ = std::fs::rename(&tmp, &p);
+        }
     }
+}
+
+/// Does this address belong to one of the hosts the manifest names (`host` or `host:port`), over https?
+pub fn net_allows(hosts: &[String], url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("https://") else { return false };
+    if url.len() > 2000 || url.chars().any(|c| c.is_control() || c == ' ' || c == '\\' || c == '@') {
+        return false;
+    }
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let host = authority.split(':').next().unwrap_or("");
+    !host.is_empty() && hosts.iter().any(|h| h.eq_ignore_ascii_case(authority) || h.eq_ignore_ascii_case(host))
+}
+
+/// One request a module asked for, to a host its manifest names. The answer is `{ id, status, body, error }`: a status of 0 is a
+/// network that did not answer (`error` says why); what came back is cut at 256 KB. Redirects are not followed (they could
+/// lead to a host the manifest does not name): the module sees the 3xx.
+pub fn fetch(hosts: &[String], req: &Value) -> Value {
+    let id = req["id"].as_str().unwrap_or("").to_string();
+    let url = req["url"].as_str().unwrap_or("");
+    if !net_allows(hosts, url) {
+        return json!({ "id": id, "status": 0, "body": "", "error": "That address is not one the plugin may reach." });
+    }
+    let method = match req["method"].as_str().unwrap_or("GET").to_ascii_uppercase().as_str() {
+        "POST" => "POST",
+        _ => "GET",
+    };
+    let agent = ureq::AgentBuilder::new().redirects(0).timeout(Duration::from_secs(20)).build();
+    let mut r = agent.request(method, url).set("User-Agent", "nadi/1.1");
+    if let Some(h) = req["headers"].as_object() {
+        for (k, v) in h.iter().take(12) {
+            let k_low = k.to_ascii_lowercase();
+            if matches!(k_low.as_str(), "host" | "cookie" | "content-length" | "transfer-encoding" | "connection") {
+                continue;
+            }
+            if let Some(v) = v.as_str() {
+                r = r.set(k, v);
+            }
+        }
+    }
+    let sent = match req["body"].as_str() {
+        Some(b) if method == "POST" => r.send_string(b),
+        _ => r.call(),
+    };
+    let (status, resp) = match sent {
+        Ok(resp) => (resp.status(), Some(resp)),
+        Err(ureq::Error::Status(code, resp)) => (code, Some(resp)),
+        Err(e) => return json!({ "id": id, "status": 0, "body": "", "error": format!("Network error: {e}") }),
+    };
+    let mut buf = Vec::new();
+    if let Some(resp) = resp {
+        let _ = resp.into_reader().take(MAX_OUT as u64).read_to_end(&mut buf);
+    }
+    json!({ "id": id, "status": status, "body": String::from_utf8_lossy(&buf) })
 }
 
 #[cfg(test)]
@@ -114,6 +188,33 @@ mod tests {
         // what stands for the folder cannot be an option
         assert!(!allowed(&t, &line("git -C --upload-pack=calc rev-parse --abbrev-ref HEAD")));
         assert!(!allowed(&[], &line("git status")));
+    }
+
+    #[test]
+    fn a_module_reaches_only_the_hosts_its_manifest_names_over_https() {
+        let hosts = vec!["api.anthropic.com".to_string(), "localhost:8080".to_string()];
+        assert!(net_allows(&hosts, "https://api.anthropic.com/api/oauth/usage"));
+        assert!(net_allows(&hosts, "https://API.anthropic.com/x?y=1"));
+        assert!(net_allows(&hosts, "https://localhost:8080/a"));
+        // another host, plain http, a name that only starts like it, a login in the address, a space
+        assert!(!net_allows(&hosts, "https://evil.example.com/api.anthropic.com"));
+        assert!(!net_allows(&hosts, "http://api.anthropic.com/"));
+        assert!(!net_allows(&hosts, "https://api.anthropic.com.evil.com/"));
+        assert!(!net_allows(&hosts, "https://api.anthropic.com@evil.com/"));
+        assert!(!net_allows(&hosts, "https://api.anthropic.com/a b"));
+        assert!(!net_allows(&[], "https://api.anthropic.com/"));
+        // a request to a host that is not named is not sent
+        let r = fetch(&hosts, &json!({ "id": "x", "url": "https://example.org/" }));
+        assert_eq!((r["id"].as_str(), r["status"].as_i64()), (Some("x"), Some(0)));
+    }
+
+    /// Manual: asks the real host. `cargo test --release a_request_reaches_the_host -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn a_request_reaches_the_host() {
+        let r = fetch(&["api.anthropic.com".to_string()], &json!({ "id": "x", "url": "https://api.anthropic.com/api/oauth/usage", "headers": { "Authorization": "Bearer nope", "anthropic-beta": "oauth-2025-04-20" } }));
+        println!("{r}");
+        assert_eq!(r["status"], 401);
     }
 
     #[test]

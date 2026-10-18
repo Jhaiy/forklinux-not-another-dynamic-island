@@ -8,48 +8,48 @@ The island itself is a window manager for cards: the pill, the hub, the banners,
 the sensors (the sound, what is playing, which programs have a window). Everything it shows beyond that comes from a plugin,
 and its own features are no exception.
 
-There are three kinds:
+There are three kinds (a face is a fourth, for a plugin that draws):
 
 * **Declarative**: the manifest names an address to poll (JSON, or a calendar), and the card, the pill, the rings and the banner
   are written as templates over what the address answers. No plugin code runs.
 * **Module**: a WebAssembly file for a plugin that needs real logic (audio, games, files, the calendar, what is playing). The
-  island calls it with what it may see; it answers with what the island is to do. It has **no network of its own**, only the
-  sensors its manifest lists, a time budget for each call, and a memory cap. It is written in any language that makes
+  island calls it with what it may see; it answers with what the island is to do. It has **no network of its own**: one that sees this PC reaches nothing, and one that reaches a host (`permissions.net`)
+  sees nothing of this PC. It has only the sensors its manifest lists, a time budget for each call, and a memory cap. It is written in any language that makes
   WebAssembly; there is a Rust SDK and there are plugins to read in [nadi-plugins](https://github.com/Llyme/nadi-plugins).
-* **Native**: a plugin written in Rust inside the app, for what a sandbox must not hand out: the list of windows with their
-  paths, performance counters, other programs' files and logins, the browser extension. See [The native plugins](#the-native-plugins).
 
-**The island starts as a blank slate.** Nothing ships inside it but the native plugins, and those are off until you switch them
-on. Declarative plugins and modules are folders, from [nadi-plugins](https://github.com/Llyme/nadi-plugins) (Settings > Plugins >
+**The island starts as a blank slate.** Nothing ships inside it: every plugin is a folder, and is off until you switch it on. They come from [nadi-plugins](https://github.com/Llyme/nadi-plugins) (Settings > Plugins >
 `+`, or *Get plugins* on a fresh list) or from any repository or folder you point it at: *Time* and *Calendar* are two of them. The
 host knows none of them by name.
 
 ## What a plugin can do
 
-| | declarative | module | native |
-|---|:-:|:-:|:-:|
-| a **card** in the hub (and floating) | templates | blocks | blocks, or its own face |
-| a **pill** on the collapsed island, while something is going on | templates | `pill` | yes |
-| a pill that **comes by itself** for a moment, like the time | | `say` with a `pill` | yes |
-| **rings** in the hub, next to CPU and memory | templates | `rings` | yes |
-| a **banner** (with a priority; mute and Do not disturb apply) | `attention` | `say` | yes |
-| **buttons** that call the plugin back | | `buttons`, `action` events | yes |
-| a picture | `image` | `image` | yes |
-| **events for the calendar** | `format: "ics"` | `events` | yes |
-| read the calendar | | `calendar` | yes |
-| see what is playing, press play / next | | `media`, `media_control` | yes |
-| see how busy the CPU and memory are | | `system` | yes |
-| hear the sound (levels and bands) | | `audio` | yes |
-| see which programs have a window | | `processes`, `titles`, `programs` | yes |
-| know how long the keyboard and the mouse were left alone | | `idle` | yes |
-| read what other apps notify | | `notifications` | yes |
-| run a command (`git`...), in the shape the manifest lists | | `run` | yes |
-| keep a small file between runs | | `storage` | yes |
-| read a file when it changes | | `files` | yes |
-| ask the network | listed hosts | never | yes |
-| keep time without being polled | `every` | `wake_in` | yes |
-| ask the others to be quiet (a game is on the screen) | | `quiet` | yes |
-| a line about how it is doing, in Settings | `status` | `note` | yes |
+| | declarative | module |
+|---|:-:|:-:|
+| a **card** in the hub (and floating) | templates | blocks |
+| a **pill** on the collapsed island, while something is going on | templates | `pill` |
+| a pill that **comes by itself** for a moment, like the time | | `say` with a `pill` |
+| **rings** in the hub, next to CPU and memory | templates | `rings` |
+| a **banner** (with a priority; mute and Do not disturb apply) | `attention` | `say` |
+| **buttons** that call the plugin back | | `buttons`, `action` events |
+| a picture | `image` | `image` |
+| **events for the calendar** | `format: "ics"` | `events` |
+| read the calendar | | `calendar` |
+| see what is playing, press play / next | | `media`, `media_control` |
+| see how busy the CPU and memory are | | `system` |
+| hear the sound (levels and bands) | | `audio` |
+| see which programs have a window | | `processes`, `titles`, `programs` |
+| know how long the keyboard and the mouse were left alone | | `idle` |
+| read what other apps notify | | `notifications` |
+| run a command (`git`...), in the shape the manifest lists | | `run` |
+| keep a small file between runs (sealed for this Windows user) | | `storage` |
+| see the Claude Code sessions | | `claude` |
+| see the pages open in the browsers (through the NADI extension), press a button of one | | `browser` |
+| open a link, bring a window to the front | | `open`, `focus` |
+| read a file when it changes | | `files` |
+| ask the network | listed hosts | `fetch`, to the hosts it lists, and then it sees nothing of this PC |
+| keep time without being polled | `every` | `wake_in` |
+| ask the others to be quiet (a game is on the screen) | | `quiet` |
+| a line about how it is doing, in Settings | `status` | `note` |
 
 ## Where they live
 
@@ -60,22 +60,13 @@ host knows none of them by name.
 Settings > Plugins lists them, shows what each one asks to see, has the switches, each plugin's settings, a button to
 mute its banners, and **Do not disturb**. A plugin you drop in is **off** until you turn it on, and switching it on
 asks first. "Open the plugins folder" opens the folder; "Look again" reads it again. The app puts nothing in the
-folder: the plugins come from a repository (see below) or from you. The native plugins are in the same list, above the ones you install.
+folder: the plugins come from a repository (see below) or from you.
 
 ## What ships with the app
 
-| plugin | kind | what it does | what it looks at |
-|---|---|---|---|
-| Games | native | the game you are playing, for how long, and how it runs (FPS, GPU, CPU, memory); a pill | which programs fill a screen with no title bar; Windows' own counters |
-| Page Reader | native | a card in the expanded island for each page you have open (a walkthrough, a post, an article...; a page of no known kind has none) | the browser windows, and what the NADI browser extension sends (never a private window or a blocked site) |
-| Downloads | native | what the browsers, Steam and qBittorrent are downloading | partial files in the download folders, the browsers' history, qBittorrent's own files |
-| Claude Code | native | your sessions, and a pill when one needs you or has finished; the 5-hour and 7-day limits as two rings in the hub, with a peek | Claude Code's own session files; for the rings, its own sign-in to Claude (kept encrypted for your Windows user; Claude Code's login is never read), and it asks Anthropic and nothing else |
-
-Each of them can be switched off, and one that is off does nothing: no thread works, no file is read, nothing is asked of Windows
-and its card, its pill and its widgets are gone. **A new install starts blank**: every plugin is off, and the expanded island says
-so, with a button to the plugin list. An install that has run before keeps what it had: a plugin takes over what the old
-settings file said about it the first time it is seen (a game switch that was off stays off; a calendar link that was set
-switches Calendar on, and the agenda it used to be next to is part of it now; the CPU and RAM rings stay on).
+Nothing: every plugin of NADI is a folder, and the official ones are in [nadi-plugins](https://github.com/Llyme/nadi-plugins) (Time,
+Calendar, Games, Downloads, Work, Now playing, Notification mirror, System meters, Eyes, Sound light, Claude, Page Reader). **A new install starts blank**: the expanded island says so, with a button to the plugin list. An install that has
+run before is asked once whether to get the plugins it had from there, and keeps their settings.
 
 ### What stays in the island
 
@@ -92,32 +83,23 @@ switches Calendar on, and the agenda it used to be next to is part of it now; th
 
 The top of the expanded island is **rows**, and so can be its bottom, under the cards. Every row has a left, a center and a right place, and the plugins fill them with
 **widgets**: the eyes (a widget of the Eyes plugin), the date and the time (of Calendar), three thin bars for the CPU, the memory
-and the GPU (of System meters), two labelled bars for the Claude limits (of Claude Code), and the rings any plugin adds. A plugin
-may offer **as many widgets as it likes**: System meters and Claude Code also offer a ring for each number. The ones that
-`start` are in the head the first time; the rest wait in the tray of edit mode. Widgets start at the top; the bottom is empty
+and the GPU (of System meters), two labelled bars for the Claude limits (of Claude usage), and the rings any plugin adds. A plugin
+may offer **as many widgets as it likes**: System meters and Claude usage also offer a ring for each number. The ones that
+`start` are in the head the first time; the rest wait in the tray of Settings > Expanded Island. Widgets start at the top; the bottom is empty
 until you drop a widget there.
 
 * Every widget is shown. When they do not fit in the first row, the head grows another, as many as it takes.
 * The center of a row is at its dead center. The two sides share what is left of it, equally, and a side only grows up to that
   half, so the center never moves for a side. A row with nothing in the center has none, and the two sides share the whole row.
-* **Edit mode** (the pencil in the settings' tab row) lets you arrange it: drag a widget to the left, center or right of any row
-  (it is refused, in red, when there is no room; the rows of the bottom of the island are under the cards), or drag it off the
-  island to put it back in the tray. The **tray** lists every widget of the plugins that are on, by plugin: drag one onto a place
+* **Settings > Expanded Island** lets you arrange it: drag a widget to the left, center or right of any row
+  (it is refused, in red, when there is no room; the rows of the bottom of the island are under the cards), or drag it onto the
+  tray to take it out. The **tray** lists every widget of the plugins that are on, by plugin: drag one onto a place
   (or press it, and it goes to its own place of the first row). It keeps one height and scrolls inside itself; a group folds
   (the first two start open), a search cuts it down by the widget's or the plugin's name, and "Hide in use" folds away what is
   placed already. Add a row, or Reset (which puts back only the widgets that start in the head). What you arranged is kept in
   `%APPDATA%\NADI\head.json`; a widget that starts, and that a plugin adds later, takes its own place, and one whose plugin is
   off is not drawn.
 * A widget may open a **page** (a *pane*): the date of the Calendar plugin opens the month view in place of the cards, and pressing it again brings the cards back.
-
-For a plugin written in Rust (a native one), a widget is `head.register({ id, plugin, name, place, rank, width, start, preview, build })` in its
-file in `ui/plugins/` (see `eyes.js` and `claude-code.js`): `start: false` keeps it in the tray until the user
-places it, and `preview()` gives the still picture its tile shows. A ring is `addRing(key, color, plugin, rank, start)`.
-A widget's tooltip is `host.setTip(el, content)`: a string is a headline with its note under it, and anything else is drawn as it is,
-an element or a function that makes one each time the tooltip shows (`tipRows(rows, { title, foot })` in `kit.js` makes a table
-of labels, numbers, bars and notes, as the bars of System meters and Claude usage do). A
-declarative plugin's `rings` (see below) are widgets of the right side already. Widgets for the other kinds of plugin are not
-open yet: they are drawn by the island from the blocks the plugin gives.
 
 ## Modals, and plugins from a repository
 
@@ -151,9 +133,6 @@ with `action == "modal"` and `args == { "button", "values", "closed" }`. It has 
 another plugin, and a plugin that is switched off loses its modal. A modal asks for no permission: it only shows words and takes
 answers. In Rust: `Reply::modal(Modal::new("Snooze").text("For how long?").choice(...).primary("snooze", "Snooze"))` (see
 `busy-meter` in nadi-plugins).
-
-**A face** (a native plugin's file in `ui/plugins/`) uses `openModal(spec, onResult)` and `askModal(spec)` from `kit.js`; the blocks
-are the same, and `checks` too (rows with a tickbox, a tile, badges and a note: the list of plugins in a repository is one).
 
 ### Plugins from a repository
 
@@ -278,7 +257,7 @@ The data picked from the answer. A list becomes `items`, with `count` and `first
 | `{ "image": "{{art}}" }` | a picture; the text must be a `data:image/png;base64,...` address (png, jpeg, webp, gif; up to 200 KB). Never a link: the island does not fetch for a plugin. |
 
 A block with nothing to say (an empty text, a fact with no value) is left out. A module has the same blocks as JSON
-(`{ "kind": "progress", "value": 0.4 }`...), and two more: `bars` (a row of meters) and `buttons`.
+(`{ "kind": "progress", "value": 0.4 }`...), and these: `bars` (a row of meters), `buttons`, `seek` (a thin bar you can press, with `before` and `after` buttons at its sides), `graph` (a line through numbers, oldest first: `values`, `max` for the top of the graph, and up to four `marks` for faint lines across it), `lines` (rows of an icon and a text, the one that is `now` lit), `meter` (`label`, `value`, `text`, `color`), `stats` (`items` of a `value` and a `label`) and `text` with a `label` (a paragraph that opens in bold). `picture` (a page's main picture, by its id) and `reader` (a guide laid out to be read, by its key: the island fetches the words and the pictures itself, from its own link to the browser extension) are for a plugin that has `browser`. A card may also have `controls` (buttons in its header), a `tile` (a letter in a colour, with a `ring` around it), a `sub_icon` and a `tone` (`waiting`, `working`, `finished` or `idle`: the card is marked, and its icon sits at the right), and `badges` (small icons at the right, with a tooltip). A pill may have a `tile`, `rows` (a label, a bar and a number: a peek) and `brief` (it comes by itself, and its `rank` may be up to 100).
 
 ### A moment inside a text
 
@@ -377,12 +356,17 @@ to that call as `{ "text": ... }`.
 | `permissions.audio` | hear what is playing, as a level and 16 bands (about 20 times a second; `bands` is the scale of the island's lights and fills up on loud music, `spectrum` keeps its range, for a meter). Never the sound. |
 | `permissions.processes` | see which programs have a window, and which is in front (every 2 s) |
 | `permissions.titles` | ... and the titles of those windows (a browser's title is its page), and the popups that have no button in the task bar; each window has an `id`, a size, and `tool` |
-| `permissions.programs` | ... and, for each, where the program is (`path`), its name, and its icon (a `data:` address, told the first time only) |
+| `permissions.programs` | ... and, for each, where the program is (`path`), its name, its icon (a `data:` address, told the first time only), and `full`: it covers its whole screen and has no title bar, as a game does |
 | `permissions.idle` | `idle_s` in the `processes` event: seconds since the keyboard or the mouse was last used (never what was typed) |
 | `permissions.notifications` | an event with the title and the text of what other apps notify (Windows' toasts), once for each; Windows asks the user once |
-| `permissions.open` | links a banner of the module may open when it is pressed (`["viber://", "https://discord.com/"]`: it starts with one of them) |
 | `permissions.run` | command lines it may have run, each as written: `"git -C * status --porcelain"` (`*` is one argument the module chooses, never one that starts with `-`). The island runs it without a window, for up to 8 seconds, and tells the module what it printed. |
 | `permissions.storage` | a small file of its own (up to 64 KB), told with the start and written when a reply says `store` |
+| `permissions.usage` | watch up to four programs (a reply says `watch`, with their process ids) and be told, each second, what each uses: CPU, memory, graphics card, video memory, and frames per second (counted only while it watches; Windows lets only an administrator count them) |
+| `permissions.browser` | the pages open in the browsers, as the NADI browser extension reads them (`browser` event, about every second when something changed, for the pages the module `watch`es): headings, short paragraphs, buttons and links with where they sit, the page's metadata, its video. The module says in `browser.config` which sites are never read and which buttons are safe to press; the extension reads nothing until it is told. A reply may ask for a button to be pressed or a tab to be sent to another page of its site (`browser.press`, `browser.go`; `browser_done` says it was done). |
+| `permissions.claude` | the Claude Code sessions on this PC, every 2 s (`claude` in the event): the title, the folder, the prompt, the latest tool calls, how full the context is, what it cost, the window it runs in |
+| `permissions.net` | the hosts it may ask (`api.anthropic.com`), always over https; a reply says `fetch` and the answer comes as a `fetched` event. A module that has this sees nothing of this PC (none of the sensors above), so what it sees cannot be carried out. Every event of such a module has `rand`, 32 random bytes as hex, to sign in with. |
+| `permissions.open` | links it may open: a banner's `open`, or a reply's `open` (the link starts with one of them) |
+| `permissions.downloads` | what the browsers, Steam and qBittorrent are downloading (names and progress, every 1.5 s), and have a finished one shown in its folder |
 | `permissions.files` | files it may read when they change (`~` and `%VARIABLES%` are filled in; the last 256 KB) |
 | `permissions.calendar` | the events of the island's calendar that are not over yet (an hour of grace), when they change |
 | `permissions.media` | what is playing: a session for each player, with the title, the artist and the position (every second while it plays). Never the picture. |
@@ -394,7 +378,9 @@ to that call as `{ "text": ... }`.
 | `budget.call_ms` | the time one call may take: 4 by default, 20 at most |
 | `budget.memory_mb` | memory: 8 by default, 64 at most |
 
-A module cannot list `net`: nothing that hears or sees the PC can also reach the network. One exception, which sends nothing out: a
+A module that lists `net` sees nothing of the PC (none of the sensors, no commands): nothing that hears or sees the PC can also
+reach the network, so what it sees cannot be carried out. (*Claude* is one plugin made of two parts, see [Bundles](#bundles): the part
+that reaches Anthropic sees nothing of the PC, and the part that sees the sessions reaches nothing.) The one exception to "no network for what sees" sends nothing out: a
 module may name a calendar link (`source.http` with `"format": "ics"`, the address a `{{settings.url}}` setting holds, and `net` for
 that host only). The island reads the link with a plain request to that one address and brings its events to the calendar; the
 module makes no request, and gets only the events. This is how *Calendar* works.
@@ -418,6 +404,8 @@ import nothing. The event and the answer are JSON.
 { "event": "system", "system": { "cpu": 12.5, "ram": 49.0, "ram_used_gb": 13.6, "ram_total_gb": 27.6 }, ... }
 { "event": "notifications", "notifications": [ { "seq": 7, "app": "Discord", "title": "Sam", "body": "are you there?" } ], ... }
 { "event": "command", "id": "branch", "code": 0, "stdout": "main", ... }   // the answer of a command it asked for
+{ "event": "usage", "usage": [ { "pid": 4120, "alive": true, "cpu": 12.4, "ram_gb": 6.2, "ram": 20, "gpu": 73, "vram_gb": 4.1, "fps": 144, "low_fps": 98, "frame_ms": [6.9, 7.1] } ], ... }
+{ "event": "downloads", "observed": [ { "id": "chrome.exe:7", "source": "Chrome", "kind": "browser", "name": "a.zip", "received": 5000, "total": 90000, "speed": null } ], "ended": [ { "id": "chrome.exe:6", "finished": true, "path": "C:/Users/me/Downloads/b.zip" } ], ... }
 { "event": "action", "action": "snooze", "args": null, ... }   // a button was pressed (on a card, a pill, or in the plugin's settings)
 
 // out (everything optional; a thing the answer does not mention stays as it was; null takes it away)
@@ -449,16 +437,19 @@ import nothing. The event and the answer are JSON.
 * `quiet` asks the other plugins to hold their peace while something fills the screen; `ambient` banners and pills wait for it.
 * `media` presses a button of the player (the plugin must have `media_control`): `{ "action": "play_pause" | "next" | "previous" | "focus" | "seek" | "seek_by" | "set_rate", "source", "value" }`.
 * `run` asks for commands (`[{ "id": "branch", "line": ["git", "-C", "C:/proj", "rev-parse", "--abbrev-ref", "HEAD"] }]`, up to 4); each answers with a `command` event. `store` keeps a value (see `permissions.storage`).
+* `watch` lists the programs to watch (process ids, up to four; `[]` stops it): each second the module is told what they use, in a `usage` event. `reveal` shows a finished download in its folder (the `path` that an `ended` of the `downloads` event gave).
+* `fetch` asks the island for an address (`[{ "id", "method": "GET" | "POST", "url", "headers": {}, "body" }]`, up to 2): only a host of `permissions.net`, over https; a redirect is not followed. The answer is a `fetched` event: `{ "id", "status", "body", "error" }` (a `status` of 0 is a network that did not answer; the body is cut at 256 KB). `open` opens a link now (see `permissions.open`), and `focus` brings a window to the front (`{ "exe": the program's path, "title": a word of its title }`, needs `programs`).
+* A pill a module says (`say` with a `pill`) may have a `key` (one with the same key replaces the one that waits), a `tile`, `badges`, a `tone` (`waiting` or `finished`: the glow and an icon at the right) and a `press` (an action the module is called with when it is pressed). `cancel` (`["key"]`) takes such a pill back.
 * `cards_more` lists cards after the first (up to 5, each with an `id` of its own); they replace the ones it had. A card and a pill may have an `image` (a `data:` raster, or `"keep"`: the one it had), and a card a `seek` block: a thin bar you can press, which calls the module back with `fraction`.
 * A banner (`say`) may have a `title` of its own, an `open` link (see `permissions.open`) that pressing it opens, and a `group`: banners of one app pile up, and too many in a row become one that counts them.
 
 * `widgets` draws the widgets its manifest lists, and `pane` a page. A widget is listed in the manifest
   (`"widgets": [{ "id", "name", "place", "rank", "width", "interactive", "start" }]`) and answered with
-  `"widgets": { "<id>": { "blocks": [...], "tip": [...] } }`; it is in the tray of edit mode like any widget, and in the head
+  `"widgets": { "<id>": { "blocks": [...], "tip": [...] } }`; it is in the tray of the editor like any widget, and in the head
   from the start unless `"start": false`. A pane is `"pane": { "title", "blocks": [...], "open": true }` (`open` brings it up
   now; `"pane": null` takes it away and the cards are back). Both are made of blocks the island draws: `text` (`kind`: title,
-  big, small, muted, note, warn), `bars` (thin stacked bars, `label`, `part`, `color`; wide with the number in a tooltip), `clock` (`"time"` or `"date"`: the island keeps it ticking, so it costs no call), `bar`,
-  `head` (a title with `prev` and `next` buttons and a `press` id), `grid` (up to seven columns: the Calendar's month; its `cells`
+  big, small, muted, note, warn), `bars` (thin stacked bars, `label`, `part`, `color`; wide with the number in a tooltip), `rings` (the same meters as small circles with the label inside), `clock` (`"time"` or `"date"`: the island keeps it ticking, so it costs no call), `bar`,
+  `item` (a picture or an icon with a line of words: `{ "item": { "tile", "icon", "text", "sub" } }`; `tile` is a `data:` raster, or `"keep"` for the one it showed last), `icon_button` (a round button, `{ "icon_button": { "icon", "press", "label" } }`: a press is an `action` with `"widget"` and `args == { "id": press }`), `head` (a title with `prev` and `next` buttons and a `press` id), `grid` (up to seven columns: the Calendar's month; its `cells`
   carry `t`, `id`, `state`, `dots`), `rows` (title, sub, time, past) and `buttons` (up to four). A press comes back as an
   `action` event: `action == "widget"` with `args == { "id", "pane_open" }`, or `action == "pane"` with `args == { "id" }`. They go
   with the plugin when it is switched off. A module that wants a month view of the calendar asks for `"calendar_past_days"`
@@ -473,32 +464,84 @@ fuel (the budget); a module that fails five calls in a row is switched off; a ba
 seconds and not repeated within a minute; its text is cut at 200 characters, a list at 12 rows, bars at 32, rings at 3,
 buttons at 6 on a card and 3 on a pill; a picture must be a `data:` raster of 200 KB at most.
 
-## The native plugins
+## Tiles
 
-A native plugin is a Rust file in `src-tauri/src/builtin` with its manifest beside it, a line in `builtin/mod.rs`, and, if it
-draws anything its own, a file in `ui/plugins` (listed in `ui/plugins/index.js`; `surface.js` there draws what modules bring: widgets and panes). It goes through the same host as the others
-(the same list, switch, question, settings, mute and Do not disturb), and may do more because it is Rust: it runs
-its own threads and reads what a sandbox must not hand out. It reaches the screen the same way, too: a card (rich ones
-are drawn by its own file in `ui/plugins`, plain ones are the blocks above), `ctx.offer_pill` for a pill it declared in
-`pills`, `ctx.say` for a banner, `ctx.set_quiet`, `plugin_call` from its own face.
+The open island shows a grid of **tiles**, squares like a phone's widgets, one for each plugin that has one. A tile is always there
+while its plugin is on, whether or not anything is going on, and goes only when the user takes it out. A plugin declares its tile in
+its manifest:
 
-```rust
-impl Native for Games {
-    fn manifest(&self) -> Manifest { manifest_of(include_str!("games.json")) }
-    fn start(&self, ctx: &Ctx) { /* spawn threads; each checks ctx.on() */ }
-    fn switched(&self, ctx: &Ctx, on: bool) { /* let go of what it holds when it is off */ }
-    fn cards(&self, ctx: &Ctx) -> Option<Value> { /* what the hub and the floating cards draw */ }
-    fn call(&self, ctx: &Ctx, cmd: &str, args: &Value) -> Result<Value, String> { /* from its own UI file */ }
-    fn adopt(&self, old: &Value, default_on: bool) -> Adopted { /* what the old settings file said */ }
+```json
+"tile": { "name": "Games", "icon": "gamepad", "tint": "#3ea66f", "sizes": ["small", "wide"], "idle": "no game running" }
+```
+
+`sizes` are the sizes it can be drawn in (the settings list them small, wide, large), and the first you list is where it starts: `small` (1 × 1), `wide` (a full row) and `large`
+(2 × 2). `idle` is what it says while there is no card. `widget` (optional) names a widget of the plugin whose picture is the face of a
+wide or large tile with no card (System meters draws its rings). The island has as many columns as fit squares of about 90 px.
+
+A tile has no icon in a corner: the picture behind its words is what it is about. That picture is the card's `image` (the icon of a
+program, the cover of what is playing), blown up and frosted, with a dark gradient under the words so any icon reads; a card with none
+is the plugin's `tint` with its icon drawn large. At rest the picture goes: plain glass, and the icon large and faint. `"look": "date"`
+gives a tile the date as a block (a calendar). A small tile never has words or a number (the tooltip has them): a glance that is a percent is a ring that fills, a card with a `done` caption (or the `finished` tone) is a tick, anything else that is going on is the glyph (or the picture) with a small bar under it that slowly breathes. `"look": "water"` makes a small tile fill up like water (waves on top) as far as the glance's percent (full when done, a third when there is no percent); it is the look of Downloads. `"look": "status"` makes a small tile say what the plugin is up to instead of a number: from the card's `tone`, three dots going up and down for `working`, a knock (the picture shakes and a ring goes out from the tile) for `waiting` on the user, a tick for `finished`. `"picture": "claude-code.gif"` names a picture in the plugin's folder (a png, gif, webp or jpeg of 512 KB at most; a gif moves) that is the face while something is going on and the card has none of its own. A tile with no picture at all is bare: no background, only the words. Selected, the picture sharpens and a ring in its own colour goes round the tile.
+
+The face comes from the plugin's first card. A card may say what its tile says at a glance with `Card::glance(big, caption)` (a big
+number or word, and a few words under it: "1" and "needs you"); without it the tile shows the card's title and second line, and a
+large tile shows the card's picture and buttons. Pressing a tile takes the place of the notifications under the grid with the
+plugin's cards (the same cards, which open and are dragged out to float from there), and pressing it again brings the notifications
+back. A plugin with cards and no `tile` still gets one for as long as it has cards. The user arranges the tiles in Settings >
+Expanded Island > Tiles, and only there (where each one sits on the grid, its size, and which to take out); `%APPDATA%\NADI\tiles.json` keeps it.
+
+## The resting island
+
+The collapsed island, when nothing else is on it, is always **three sections, left, center and right, with one widget in each**.
+The user fills them in Settings > Resting Island (the widgets of every plugin that is on can go in; the eyes in the center until they
+choose). A plugin may offer a resting island of its own, for while it has something going on: it says in its manifest which widget
+is in each section, and its module says in its reply when it is on.
+
+```json
+"widgets": [
+  { "id": "song", "name": "Song", "place": "left", "rank": 40, "width": 120, "start": false },
+  { "id": "playpause", "name": "Play / pause", "place": "right", "rank": 41, "width": 30, "interactive": true, "start": false }
+],
+"rests": [
+  { "id": "playing", "name": "Now playing", "description": "The song at the left, play and pause at the right.",
+    "when": "While something plays", "priority": 60, "left": "song", "center": "", "right": "playpause" }
+]
+```
+
+`left`, `center` and `right` name a widget of the plugin (`song`) or of another (`eyes:head`); empty is none. `when` is the line
+the user reads. A module says which of its islands are on in a reply: `"rest": ["playing"]` (`Reply::rest(&["playing"])`; `[]`
+says none; the last said stands). The widgets are the head's (`widgets` with blocks, or a face with `"slot": "widget"`), so what a
+module draws for the head is what rests in the island too; `"start": false` keeps one out of the head until the user puts it there.
+In a section a widget has the height of the island and a width of a third of it: the head's widgets are made smaller to fit.
+
+An island is **what a plugin's pill became**: a plugin that offers one has no pill. The user may switch it off (Settings > Resting Island), and then nothing shows for the plugin.
+While it is on (it is, until they switch it off), the one that is highest in their list wins (they move them up and down; until they do, the higher `priority` of the manifests does); when none is, the user's own island shows. In a bundle, a part's widgets are named by the part (`claude-sessions:needs`), and a part may say that an island of its bundle is on.
+They may change what is in any of its sections (the plugin's widgets first, then any other). Banners and pills of other plugins
+still come over any resting island.
+
+## Bundles
+
+A plugin that needs both a sensor and the network is a **bundle**: one plugin in the list (one switch, one set of settings, one
+mute), made of **parts**, each a module with the permissions of its own. The host keeps them apart: a part that lists `net` sees
+nothing of the PC, as any module, so what one part sees cannot be carried out by another (they cannot talk to each other).
+
+```json
+{
+  "id": "claude", "name": "Claude", "kind": "bundle",
+  "settings": { "alerts": { "label": "...", "type": "toggle", "default": true }, "usage": { ... } },
+  "actions": [{ "part": "usage", "id": "usage_login", "label": "Sign In" }],
+  "widgets": [{ "part": "usage", "id": "bars", "name": "Bars" }],
+  "parts": [
+    { "id": "sessions", "module": "sessions.wasm", "crate": "claude-code", "permissions": { "claude": true, "processes": true } },
+    { "id": "usage", "module": "usage.wasm", "crate": "claude-usage", "permissions": { "net": ["api.anthropic.com"], "storage": true } }
+  ]
 }
 ```
 
-The manifest of a native plugin is the one of any plugin, with `"permissions": { "sees": [{ "name": "use CLI", "detail": "git" }] }`: the permissions are the app's, picked from its list (`src-tauri/src/permissions.rs`: windows, performance, idle time, read files and folders, network, use CLI, notifications, ...), with what it is of when the permission asks (the hosts, the command). What each permission grants is said in the app's words, the same for every plugin that asks for it: a plugin borrows what the app can do, it does not describe it. The names are checked by a test. Besides that it has
-`"default_on"`, `"pills": [{ "id", "w", "h", "rank", "brief" }]`, `"actions": [{ "id", "label", "ask", "then" }]` and settings of the type
-`choice`.
+A part is called `<plugin>-<part>` (`claude-sessions`) for the island: its cards, pills, rings and widgets are its own, and what it
+keeps (`storage`) is its own file. The settings are the bundle's, and every part is told them. An action or a widget names the part
+that answers it (`part`; the first when it does not say). `crate` is for the build script of the plugins repository. The list of
+permissions the user is shown is what all the parts ask for.
 
-Why these stay in Rust: *Games*, *Work* and *Page Reader* read the process list with paths and titles and Windows' counters;
-*Downloads* and *Claude Code* read other programs' files (and, for the usage rings, ask Anthropic: a module
-that sees the PC cannot reach the network, and the plugin that does cannot see it); *Notification mirror* uses Windows'
-notification access. *Now playing* shows the same media sensor a module may read, but has a seek bar, a speed menu and the
-album art in its face, which the blocks do not have, and the island's eyes follow what is playing.
+A bundle that takes the place of plugins of the same repository (two that became one) lists them: `"replaces": ["claude-code", "claude-usage"]`.
+Installing it, or updating the repository, removes those, and the bundle is on when one of them was.

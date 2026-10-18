@@ -159,7 +159,9 @@ fn latest_tag(repo: &str) -> Result<Option<String>, Fetch> {
     let agent = ureq::AgentBuilder::new().redirects(0).timeout(Duration::from_secs(30)).user_agent("NADI-plugin-installer").build();
     // (with no redirect followed, ureq hands a 3xx back as an answer, not an error)
     let tag_of = |resp: &ureq::Response| tag_from(resp.header("Location").unwrap_or(""));
-    match agent.get(&format!("https://github.com/{repo}/releases/latest")).call() {
+    // (GitHub's edge keeps the answer of this page for a while after a release: a new query and no-cache ask for a fresh one)
+    let fresh = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    match agent.get(&format!("https://github.com/{repo}/releases/latest?nadi={fresh}")).set("Cache-Control", "no-cache").call() {
         Ok(resp) => Ok(if (301..=308).contains(&resp.status()) { tag_of(&resp) } else { None }),
         Err(ureq::Error::Status(c, resp)) if matches!(c, 301 | 302 | 303 | 307 | 308) => Ok(tag_of(&resp)),
         Err(ureq::Error::Status(404, _)) => Err(Fetch::NotFound),
@@ -281,6 +283,11 @@ fn cache_root() -> Option<PathBuf> {
     Some(crate::settings::data_dir()?.join("repo-cache"))
 }
 
+/// the ids a plugin folder says it replaces
+fn incoming_replaces(dir: &std::path::Path) -> Vec<String> {
+    std::fs::read_to_string(dir.join("manifest.json")).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).and_then(|j| j["replaces"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect())).unwrap_or_default()
+}
+
 #[derive(Serialize, Clone, Debug)]
 pub struct FoundPlugin {
     pub id: String,
@@ -294,6 +301,8 @@ pub struct FoundPlugin {
     pub adds: Vec<String>,
     /// the version of it that is installed, when one is (from this repository or another source)
     pub installed: Option<String>,
+    /// the plugins of this repository it takes the place of (they go when it comes)
+    pub replaces: Vec<String>,
     /// why it cannot be installed (the manifest is wrong, an id that is not free): the rest of the repository still can
     pub problem: Option<String>,
 }
@@ -389,12 +398,7 @@ fn adds_of(m: &Manifest) -> Vec<String> {
     out
 }
 
-/// The ids that belong to the app (written in Rust, or carried inside it): a repository cannot stand in for them.
-fn app_ids(state: &IslandState) -> Vec<String> {
-    state.plugins.listing().plugins.into_iter().filter(|p| p.bundled).map(|p| p.id).collect()
-}
-
-fn look(app: AppHandle, text: String, wanted: Option<String>) -> Result<Found, String> {
+fn look(text: String, wanted: Option<String>) -> Result<Found, String> {
     let link = parse_link(&text)?;
     let repo = format!("{}/{}", link.owner, link.repo);
     let wanted = wanted.filter(|r| !r.is_empty()).or(link.reference.clone());
@@ -450,15 +454,13 @@ fn look(app: AppHandle, text: String, wanted: Option<String>) -> Result<Found, S
     let token: String = token.iter().map(|b| format!("{b:02x}")).collect();
     let stage_root = root.join(&token);
 
-    let state = app.state::<Arc<IslandState>>().inner().clone();
-    let ours = app_ids(&state);
     let plugins_dir = plugins::dir();
     let mut found: Vec<FoundPlugin> = Vec::new();
     for (dir, mine) in plugin_dirs(&files) {
         let fallback = dir.rsplit('/').next().unwrap_or("").to_string();
         let total: usize = mine.iter().map(|(_, b)| b.len()).sum();
         if mine.len() > MAX_PLUGIN_FILES || total > MAX_PLUGIN_BYTES {
-            found.push(FoundPlugin { id: fallback.clone(), name: fallback, description: String::new(), kind: String::new(), version: String::new(), permissions: vec![], adds: vec![], installed: None, problem: Some("It holds more than a plugin should.".into()) });
+            found.push(FoundPlugin { id: fallback.clone(), name: fallback, description: String::new(), kind: String::new(), version: String::new(), permissions: vec![], adds: vec![], installed: None, replaces: vec![], problem: Some("It holds more than a plugin should.".into()) });
             continue;
         }
         // (staged under a name of its own first: its id is only known once its manifest has been read)
@@ -478,9 +480,6 @@ fn look(app: AppHandle, text: String, wanted: Option<String>) -> Result<Found, S
         if found.iter().any(|f| f.id == id) {
             problem.get_or_insert(format!("Another plugin in this repository has the id \"{id}\"."));
         }
-        if ours.contains(&id) {
-            problem.get_or_insert("The app has a plugin with this id: a repository cannot replace it.".into());
-        }
         let mine_dir = plugins_dir.as_ref().map(|d| d.join(&id));
         let installed = mine_dir.as_ref().filter(|d| d.join("manifest.json").is_file()).map(|d| {
             let v = std::fs::read_to_string(d.join("manifest.json")).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()).and_then(|j| j["version"].as_str().map(str::to_string)).unwrap_or_default();
@@ -492,7 +491,7 @@ fn look(app: AppHandle, text: String, wanted: Option<String>) -> Result<Found, S
         });
         let perms = plugins::permissions_of(&m);
         // (a plugin that is wrong keeps its folder out of the install: only what is whole gets in)
-        found.push(FoundPlugin { adds: adds_of(&m), kind: if m.kind.is_empty() { "declarative".into() } else { m.kind.clone() }, permissions: perms, installed, problem, name: if m.name.is_empty() { id.clone() } else { m.name.clone() }, description: m.description.clone(), version: m.version.clone(), id });
+        found.push(FoundPlugin { adds: adds_of(&m), kind: if m.kind.is_empty() { "declarative".into() } else { m.kind.clone() }, permissions: perms, installed, replaces: m.replaces.clone(), problem, name: if m.name.is_empty() { id.clone() } else { m.name.clone() }, description: m.description.clone(), version: m.version.clone(), id });
         // (the slot is renamed to the id, for the install)
         let _ = std::fs::rename(stage_root.join(&slot), stage_root.join(&found.last().unwrap().id));
     }
@@ -512,13 +511,62 @@ fn look(app: AppHandle, text: String, wanted: Option<String>) -> Result<Found, S
 
 /// Look in a repository: what plugins it holds, and what each asks for. Nothing is installed.
 #[tauri::command]
-pub async fn repo_look(app: AppHandle, link: String, reference: Option<String>) -> Result<Found, String> {
-    tauri::async_runtime::spawn_blocking(move || look(app, link, reference)).await.map_err(|e| e.to_string())?
+pub async fn repo_look(link: String, reference: Option<String>) -> Result<Found, String> {
+    tauri::async_runtime::spawn_blocking(move || look(link, reference)).await.map_err(|e| e.to_string())?
 }
 
-/// Install the plugins of a look that you chose (their ids): copied into the plugins folder, switched off.
+/// Open a repository's page on GitHub in the browser (the link is read as any link is: only github.com, only a repository).
 #[tauri::command]
-pub fn repo_install(app: AppHandle, token: String, ids: Vec<String>) -> Result<Vec<String>, String> {
+pub fn repo_open(repo: String) -> Result<(), String> {
+    let link = parse_link(&repo)?;
+    crate::winutil::open_url(&format!("https://github.com/{}/{}", link.owner, link.repo));
+    Ok(())
+}
+
+/// Remove every plugin that came from a repository (the ones it put in the plugins folder, by their marker): off, and gone. What
+/// the user made or got from elsewhere is not touched.
+#[tauri::command]
+pub fn repo_remove(app: AppHandle, repo: String) -> Result<Vec<String>, String> {
+    let link = parse_link(&repo)?;
+    let name = format!("{}/{}", link.owner, link.repo);
+    let root = plugins::dir().ok_or("There is no plugins folder.")?;
+    let state = app.state::<Arc<IslandState>>().inner().clone();
+    let mut gone = Vec::new();
+    for e in std::fs::read_dir(&root).map_err(|e| e.to_string())?.flatten() {
+        let path = e.path();
+        let id = e.file_name().to_string_lossy().to_string();
+        if !path.is_dir() || !plugins::valid_id(&id) || !read_source(&path).map_or(false, |s| s.repo.eq_ignore_ascii_case(&name)) {
+            continue;
+        }
+        state.plugins.set(&id, false);
+        std::fs::remove_dir_all(&path).map_err(|e| e.to_string())?;
+        gone.push(id);
+    }
+    state.plugins.rescan();
+    plugins::sync_audio(&state);
+    let _ = app.emit("plugins-changed", json!(null));
+    Ok(gone)
+}
+
+/// The tag of the latest release of a repository (`Llyme/nadi-plugins`), for the update button: one small request. None when it
+/// has no release.
+#[tauri::command]
+pub async fn repo_latest(repo: String) -> Result<Option<String>, String> {
+    let link = parse_link(&repo)?;
+    let name = format!("{}/{}", link.owner, link.repo);
+    tauri::async_runtime::spawn_blocking(move || match latest_tag(&name) {
+        Ok(t) => Ok(t),
+        Err(Fetch::NotFound) => Ok(None),
+        Err(Fetch::Other(e)) => Err(e),
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Install the plugins of a look that you chose (their ids): copied into the plugins folder, switched off. With `keep_on` (an
+/// update) a plugin that was on stays on.
+#[tauri::command]
+pub fn repo_install(app: AppHandle, token: String, ids: Vec<String>, keep_on: Option<bool>) -> Result<Vec<String>, String> {
     if token.len() != 16 || !token.chars().all(|c| c.is_ascii_hexdigit()) {
         return Err("That look is over. Look again.".into());
     }
@@ -529,6 +577,7 @@ pub fn repo_install(app: AppHandle, token: String, ids: Vec<String>) -> Result<V
     let to = plugins::dir().ok_or("There is no plugins folder.")?;
     std::fs::create_dir_all(&to).map_err(|e| e.to_string())?;
     let mut done = Vec::new();
+    let mut replaced_on: Vec<String> = Vec::new();
     for id in ids {
         if !plugins::valid_id(&id) {
             continue;
@@ -554,13 +603,30 @@ pub fn repo_install(app: AppHandle, token: String, ids: Vec<String>) -> Result<V
                 std::fs::copy(e.path(), dst.join(e.file_name())).map_err(|e| e.to_string())?;
             }
         }
+        // (two plugins that became one: the old ones of this repository go, and the new one is on when one of them was)
+        let mut was_on = false;
+        for old in incoming_replaces(&src) {
+            let gone = to.join(&old);
+            if old != id && plugins::valid_id(&old) && read_source(&gone).zip(incoming.as_ref()).map_or(false, |(a, b)| a.repo.eq_ignore_ascii_case(&b.repo)) {
+                was_on |= app.state::<Arc<IslandState>>().plugins.is_on_id(&old);
+                app.state::<Arc<IslandState>>().plugins.set(&old, false);
+                std::fs::remove_dir_all(&gone).map_err(|e| e.to_string())?;
+            }
+        }
+        if was_on {
+            replaced_on.push(id.clone());
+        }
         done.push(id);
     }
     let _ = std::fs::remove_dir_all(&from);
     let state = app.state::<Arc<IslandState>>().inner().clone();
-    // (switched off, whatever was on under this id before)
+    // (switched off, whatever was on under this id before; an update leaves it as it was)
     for id in &done {
-        state.plugins.set(id, false);
+        if replaced_on.contains(id) || (keep_on.unwrap_or(false) && state.plugins.is_on_id(id)) {
+            state.plugins.set(id, true);
+        } else {
+            state.plugins.set(id, false);
+        }
     }
     state.plugins.rescan();
     plugins::sync_audio(&state);

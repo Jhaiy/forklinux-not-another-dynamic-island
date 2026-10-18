@@ -21,6 +21,7 @@
       invoke: (cmd, args) => host.invoke(cmd, args || {}),
       convertFileSrc: (p) => p,
     },
+    app: { getVersion: () => Promise.resolve("demo") },
     event: {
       listen,
       emit: (name, payload) => {

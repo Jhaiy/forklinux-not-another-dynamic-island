@@ -44,6 +44,9 @@ const STRIKES: u32 = 5;
 const AUDIO_GAP: Duration = Duration::from_millis(40);
 const PROCESSES_EVERY: Duration = Duration::from_secs(2);
 const SYSTEM_EVERY: Duration = Duration::from_secs(2);
+const USAGE_EVERY: Duration = Duration::from_secs(1);
+const DOWNLOADS_EVERY: Duration = Duration::from_millis(1500);
+const CLAUDE_EVERY: Duration = Duration::from_secs(2);
 const SAY_GAP: Duration = Duration::from_secs(3);
 const SAY_REPEAT: Duration = Duration::from_secs(60);
 
@@ -159,6 +162,13 @@ impl AudioBus {
     }
 }
 
+/// 32 random bytes as hex
+fn random_hex() -> Option<String> {
+    let mut b = [0u8; 32];
+    getrandom::getrandom(&mut b).ok()?;
+    Some(b.iter().map(|x| format!("{x:02x}")).collect())
+}
+
 fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
@@ -174,6 +184,7 @@ fn windows_now(titles: bool, programs: bool, icons_sent: &mut std::collections::
             let is_front = w.hwnd.0 as isize == front;
             let mut v = json!({ "exe": exe, "pid": w.pid, "title": if titles { w.title.clone() } else { String::new() }, "front": is_front, "id": w.hwnd.0 as isize, "w": w.w, "h": w.h, "tool": w.tool });
             if programs {
+                v["full"] = json!(w.full);
                 // (the path and the name; the icon only the first time, it is the same each time after)
                 let info = crate::exeinfo::lookup(&w.exe);
                 v["path"] = json!(w.exe);
@@ -247,6 +258,19 @@ struct Slot {
     toast_seen: u64,
     /// the programs whose icon this module has been told of
     icons_sent: std::collections::HashSet<String>,
+    /// the programs it watches (`watch` of its reply), what they use, and when it was last told
+    watch: Vec<u32>,
+    meter: crate::usage::Meter,
+    last_usage: Instant,
+    /// what the downloads sensor saw, and when it last looked
+    downloads: crate::downloadsensor::Sensor,
+    last_downloads: Instant,
+    /// when the Claude Code sessions were last looked at
+    last_claude: Instant,
+    /// what it has been told of the browser's pages, and which it watches
+    browser: crate::browsersensor::Feed,
+    /// the files it was told of, which it may have shown in their folder
+    revealable: std::collections::HashSet<String>,
 }
 
 fn load_slot(p: &Arc<Plugin>) -> Result<Slot, String> {
@@ -272,6 +296,14 @@ fn load_slot(p: &Arc<Plugin>) -> Result<Slot, String> {
         art_sent: HashMap::new(),
         toast_seen: u64::MAX,
         icons_sent: std::collections::HashSet::new(),
+        watch: Vec::new(),
+        meter: crate::usage::Meter::default(),
+        last_usage: long_ago,
+        downloads: crate::downloadsensor::Sensor::default(),
+        last_downloads: long_ago,
+        last_claude: long_ago,
+        browser: Default::default(),
+        revealable: std::collections::HashSet::new(),
     })
 }
 
@@ -364,7 +396,15 @@ fn due_events(p: &Plugin, slot: &mut Slot, values: &Value, state: &IslandState) 
     {
         let done: Vec<Value> = std::mem::take(&mut *p.results.lock().unwrap());
         for r in done {
-            out.push((event("command", values, json!({ "id": r["id"], "code": r["code"], "stdout": r["stdout"] })), false));
+            // (what a request to a host came back with, or what a command printed)
+            if r.get("op").is_some() {
+                // (a button pressed, or a tab sent on)
+                out.push((event("browser_done", values, json!({ "id": r["id"], "op": r["op"], "ok": r["ok"] })), false));
+            } else if r.get("status").is_some() {
+                out.push((event("fetched", values, json!({ "id": r["id"], "status": r["status"], "body": r["body"], "error": r["error"].as_str().unwrap_or("") })), false));
+            } else {
+                out.push((event("command", values, json!({ "id": r["id"], "code": r["code"], "stdout": r["stdout"] })), false));
+            }
         }
     }
     if perms.notifications {
@@ -382,6 +422,36 @@ fn due_events(p: &Plugin, slot: &mut Slot, values: &Value, state: &IslandState) 
         slot.last_sys = Instant::now();
         let s = crate::stats::read(state);
         out.push((event("system", values, json!({ "system": { "cpu": s.cpu_pct, "ram": s.ram_pct, "ram_used_gb": s.ram_used_gb, "ram_total_gb": s.ram_total_gb, "gpu": crate::gpu::pct(state) } })), false));
+    }
+    if perms.usage && !slot.watch.is_empty() && slot.last_usage.elapsed() >= USAGE_EVERY {
+        slot.last_usage = Instant::now();
+        let list = crate::usage::read(&mut slot.meter, &slot.watch);
+        out.push((event("usage", values, json!({ "usage": list })), false));
+    }
+    if perms.downloads && slot.last_downloads.elapsed() >= DOWNLOADS_EVERY {
+        slot.last_downloads = Instant::now();
+        let seen = slot.downloads.poll();
+        // (a file that is told of may be shown in its folder; the list does not grow without end)
+        if let Some(list) = seen["ended"].as_array() {
+            for e in list {
+                if let Some(path) = e["path"].as_str() {
+                    slot.revealable.insert(path.to_string());
+                }
+            }
+        }
+        if slot.revealable.len() > 200 {
+            slot.revealable.clear();
+        }
+        out.push((event("downloads", values, seen), false));
+    }
+    if perms.browser {
+        if let Some(b) = slot.browser.poll(crate::browsersensor::state()) {
+            out.push((event("browser", values, json!({ "browser": b })), false));
+        }
+    }
+    if perms.claude && slot.last_claude.elapsed() >= CLAUDE_EVERY {
+        slot.last_claude = Instant::now();
+        out.push((event("claude", values, json!({ "claude": crate::claudesensor::sessions() })), false));
     }
     let tick_due = !p.manifest.tick.trim().is_empty() && slot.last_tick.elapsed() >= crate::plugins::parse_every(&p.manifest.tick);
     let wake_due = slot.wake_at.map_or(false, |t| Instant::now() >= t);
@@ -407,8 +477,13 @@ fn due_events(p: &Plugin, slot: &mut Slot, values: &Value, state: &IslandState) 
     }
     // (whether the expanded island is open goes with every event)
     let hub = state.hub_is_open();
+    // (a module that may reach a host gets a fresh random value to sign in with: it has no randomness of its own)
+    let rand = if perms.net.is_empty() { None } else { random_hex() };
     for (e, _) in out.iter_mut() {
         e["hub"] = json!(hub);
+        if let Some(r) = &rand {
+            e["rand"] = json!(r);
+        }
     }
     out
 }
@@ -445,6 +520,43 @@ fn run(p: &Arc<Plugin>, slot: &mut Slot, app: &AppHandle, state: &IslandState) {
                 if let Some(ms) = out.wake_ms {
                     slot.wake_at = Some(Instant::now() + Duration::from_millis(ms));
                 }
+                if let Some(w) = out.watch.take() {
+                    if w.is_empty() && !slot.watch.is_empty() {
+                        crate::usage::read(&mut slot.meter, &[]); // (nothing to measure: the counters go)
+                    }
+                    slot.watch = w;
+                }
+                if let Some(b) = out.browser.take() {
+                    let ext = crate::browsersensor::state();
+                    if let Some(w) = b.get("watch").and_then(|w| w.as_array()) {
+                        slot.browser.watch = w.iter().filter_map(|p| Some((p.get(0)?.as_str()?.to_string(), p.get(1)?.as_str()?.to_string()))).collect();
+                    }
+                    if let Some(c) = b.get("config") {
+                        // (what the extensions are told to read; the link is served from now on)
+                        ext.serve();
+                        ext.set_config(crate::browsersensor::config_json(c));
+                    }
+                    // (a button pressed or a tab sent on waits for the browser: on a thread, and the answer is the module's next event)
+                    for op in ["press", "go"] {
+                        let Some(r) = b.get(op).cloned() else { continue };
+                        let p = p.clone();
+                        std::thread::spawn(move || {
+                            let s = |k: &str| r[k].as_str().unwrap_or("").to_string();
+                            let ext = crate::browsersensor::state();
+                            let ok = if op == "press" { ext.covers(&s("browser")) && ext.press(&s("browser"), &s("label")) } else { ext.covers(&s("browser")) && ext.navigate(&s("browser"), &s("title"), &s("url")) };
+                            let mut q = p.results.lock().unwrap();
+                            q.push(json!({ "op": op, "id": s("id"), "ok": ok }));
+                            if q.len() > 16 {
+                                q.remove(0);
+                            }
+                        });
+                    }
+                }
+                if let Some(path) = out.reveal.take() {
+                    if slot.revealable.contains(&path) {
+                        crate::winutil::reveal_file(&path);
+                    }
+                }
                 state.plugins.apply(app, state, p, out, by_user);
             }
             Err(e) => {
@@ -471,6 +583,7 @@ pub fn spawn(app: AppHandle, state: Arc<IslandState>) {
             );
         }
         let mut slots: HashMap<String, Slot> = HashMap::new();
+        let mut browser_read = false;
         loop {
             std::thread::sleep(Duration::from_millis(20));
             let active = state.plugins.wasm_plugins();
@@ -478,6 +591,12 @@ pub fn spawn(app: AppHandle, state: Arc<IslandState>) {
             // (a plugin that was switched off, or read again, is let go; what it brought to the calendar goes with it, see
             // `Host::reconcile`)
             slots.retain(|id, s| active.iter().any(|p| &p.manifest.id == id && Arc::as_ptr(p) as usize == s.id));
+            // (the browser extensions read only while a plugin that may see them is on: when the last goes, they are told to stop)
+            let want = active.iter().any(|p| p.manifest.permissions.browser);
+            if browser_read && !want {
+                crate::browsersensor::state().set_config(crate::browsersensor::disabled());
+            }
+            browser_read = want;
             let seen = card_visible(&state);
             for p in active {
                 if !(seen || p.manifest.source.when == "always") {
@@ -591,6 +710,69 @@ mod tests {
             eprintln!("skipped: {} is not built (run build.ps1 in nadi-plugins)", path.display());
         }
         bytes
+    }
+
+    /// The two Claude plugins, as built: the one that reaches Anthropic asks the island for the numbers (and the island takes the
+    /// request, for a host its manifest names), and the one that sees the sessions draws a card for one that is busy.
+    #[cfg_attr(debug_assertions, ignore)]
+    #[test]
+    fn the_claude_plugins_ask_and_draw_through_the_real_host_rules() {
+        let (Some(usage), Some(code)) = (example("claude", "usage.wasm"), example("claude", "sessions.wasm")) else { return };
+        let mut m = manifest(json!({ "id": "claude-usage", "name": "Claude usage" }));
+        m.permissions.net = vec!["api.anthropic.com".into(), "console.anthropic.com".into()];
+        m.permissions.storage = true;
+        m.widgets = vec![crate::plugins::WidgetSpec { id: "bars".into(), name: "Bars".into(), ..Default::default() }];
+        let mut rt = Runtime::load(&usage, 4, 8).unwrap();
+        let login = json!({ "login": { "access": "ACC", "refresh": "REF", "expires_ms": 0 } });
+        rt.invoke(&json!({ "event": "start", "now": 1_800_000_000_000u64, "settings": {}, "store": login, "rand": "ab".repeat(32) })).unwrap();
+        let reply = rt.invoke(&json!({ "event": "tick", "now": 1_800_000_005_000u64, "settings": {}, "rand": "ab".repeat(32) })).unwrap();
+        let out = out_of(&m, &reply);
+        assert_eq!(out.fetch.len(), 1, "{reply}");
+        assert_eq!(out.fetch[0]["url"], "https://api.anthropic.com/api/oauth/usage");
+        assert_eq!(out.fetch[0]["headers"]["Authorization"], "Bearer ACC");
+        // what the host sends back for it is read (an event with a field the module cannot read is not an event at all)
+        let answer = json!({ "event": "fetched", "now": 1_800_000_006_000u64, "settings": {}, "id": "usage", "status": 200, "error": "",
+            "body": json!({ "five_hour": { "utilization": 42.0, "resets_at": "2027-01-01T00:00:00Z" }, "seven_day": { "utilization": 10.0 } }).to_string() });
+        let reply = rt.invoke(&answer).unwrap();
+        let out = out_of(&m, &reply);
+        let bars = out.widgets.unwrap()["bars"]["blocks"][0]["bars"].as_array().unwrap().len();
+        assert_eq!(bars, 2, "{reply}");
+
+        let mut m = manifest(json!({ "id": "claude-code", "name": "Claude Code" }));
+        m.permissions.programs = true;
+        let mut rt = Runtime::load(&code, 4, 8).unwrap();
+        let session = json!({ "id": "abc-123", "pid": 9, "status": "busy", "started": 1_799_999_000_000u64, "updated": 1_800_000_000_000u64, "cwd": "C:/Work/nadi", "title": "Fix it",
+            "model": "claude-sonnet-5-5", "context_tokens": 100000, "feed": [{ "icon": "pen", "text": "Editing a.rs" }], "last": { "icon": "pen", "text": "Editing a.rs" },
+            "host": { "label": "VS Code", "icon": "code", "exe": "C:/Code/Code.exe" } });
+        let reply = rt.invoke(&json!({ "event": "claude", "now": 1_800_000_001_000u64, "settings": {}, "claude": [session] })).unwrap();
+        let card = out_of(&m, &reply).card.unwrap().unwrap();
+        assert_eq!((card.title.as_str(), card.tone.as_str(), card.sub_icon.as_str()), ("Fix it", "working", "pen"));
+        assert_eq!(card.badges[0].icon, "code");
+        assert!(card.tile.is_some() && card.body.iter().any(|b| matches!(b, crate::plugins::Block::Meter { .. })) && card.body.iter().any(|b| matches!(b, crate::plugins::Block::Stats { .. })));
+    }
+
+    /// Page Reader, as built: it tells the extension what to read, and it makes a card of a page the extension described.
+    #[cfg_attr(debug_assertions, ignore)]
+    #[test]
+    fn page_reader_asks_the_extension_and_draws_a_card_for_a_page() {
+        let Some(wasm) = example("page-reader", "page-reader.wasm") else { return };
+        let mut m = manifest(json!({ "id": "page-reader", "name": "Page Reader" }));
+        m.permissions.browser = true;
+        m.permissions.programs = true;
+        let mut rt = Runtime::load(&wasm, 20, 32).unwrap();
+        let now = 1_800_000_000_000u64;
+        let start = out_of(&m, &rt.invoke(&json!({ "event": "start", "now": now, "settings": {} })).unwrap());
+        let ask = start.browser.expect("it asks the extension");
+        assert!(ask["config"]["hosts"].as_array().unwrap().len() > 5 && ask["config"]["images"] == true);
+        let win = json!({ "exe": "msedge.exe", "path": "C:/Edge/msedge.exe", "name": "Edge", "title": "Zeppelin - Wikipedia - Microsoft\u{200b} Edge", "front": true });
+        let reply = rt.invoke(&json!({ "event": "processes", "now": now + 2000, "settings": {}, "windows": [win] })).unwrap();
+        assert_eq!(out_of(&m, &reply).browser.unwrap()["watch"], json!([["msedge", "Zeppelin - Wikipedia"]]));
+        let page = json!({ "browser": "msedge", "title": "Zeppelin - Wikipedia", "url": "https://en.wikipedia.org/wiki/Zeppelin", "version": 3, "vh": 800, "words": 5000,
+            "meta": { "ogType": "article", "site": "Wikipedia" }, "ld": [], "video": null, "guide": null, "image": 7, "nodes": [] });
+        let reply = rt.invoke(&json!({ "event": "browser", "now": now + 3000, "settings": {}, "browser": { "browsers": ["msedge"], "tabs": {}, "open": {}, "moves": [], "pages": [page] } })).unwrap();
+        let out = out_of(&m, &reply);
+        let card = out.card.unwrap().unwrap();
+        assert_eq!((card.title.as_str(), card.icon.as_str(), card.focus.as_str()), ("Zeppelin - Wikipedia", "book", "focus"));
     }
 
     // (it times the interpreter, which runs at debug speed in a debug test: `cargo test --release`)

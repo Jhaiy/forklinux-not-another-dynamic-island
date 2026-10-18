@@ -22,13 +22,8 @@ pub struct Win {
     pub h: i32,
     /// a tool window (a popup that has no place in the task bar)
     pub tool: bool,
-}
-
-/// Top-level, visible, titled, un-owned, non-cloaked windows in z-order (front
-/// first), minus the island's own. Cloaked windows (other virtual desktops,
-/// suspended UWP frames) are on no screen, so they are skipped.
-pub fn visible_windows() -> Vec<Win> {
-    visible_windows_with(false)
+    /// covers its whole screen and has no title bar (a game)
+    pub full: bool,
 }
 
 /// The same, and with `tools` the tool windows too (flagged `tool`): the popups of other apps.
@@ -83,6 +78,7 @@ pub fn visible_windows_with(tools: bool) -> Vec<Win> {
             title: String::from_utf16_lossy(&buf[..n.min(256)]),
             minimized: IsIconic(h).as_bool(),
             tool,
+            full: !tool && crate::winutil::fullscreen_captionless(h),
             w: {
                 let mut r = windows::Win32::Foundation::RECT::default();
                 let _ = GetWindowRect(h, &mut r);

@@ -5,7 +5,7 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $src = Join-Path $here "..\..\ui"
 $dst = Join-Path $here "ui"
 New-Item -ItemType Directory -Force $dst | Out-Null
-foreach ($f in "style.css", "hub.css", "main.js", "kit.js", "head.js", "sound.js", "pluginui.js", "floats.js", "modal.js", "repo.js", "faces.js") { Copy-Item (Join-Path $src $f) (Join-Path $dst $f) -Force }
+foreach ($f in "style.css", "hub.css", "main.js", "kit.js", "head.js", "tray.js", "restedit.js", "sample.js", "tiles.js", "tilesedit.js", "tilegrid.js", "sound.js", "pluginui.js", "reader.js", "rest.js", "floats.js", "modal.js", "repo.js", "faces.js") { Copy-Item (Join-Path $src $f) (Join-Path $dst $f) -Force }
 # the faces of the native plugins
 New-Item -ItemType Directory -Force (Join-Path $dst "plugins") | Out-Null
 Get-ChildItem (Join-Path $dst "plugins") -Filter *.js | Where-Object { -not (Test-Path (Join-Path (Join-Path $src "plugins") $_.Name)) } | Remove-Item -Force

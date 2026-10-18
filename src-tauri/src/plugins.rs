@@ -10,7 +10,7 @@
 //! A module plugin is a WebAssembly file that the host calls with events (what is playing, the calendar, which programs
 //! are open, a file that changed, a button that was pressed) and that answers with what the island is to do (`Out`: a
 //! card, a pill, rings, banners, events for the calendar); it is run by `pluginwasm.rs`, has no network, and is cut off
-//! when it is slow. A third kind, a native plugin (native.rs), is Rust inside the app; it reaches the screen the same way.
+//! when it is slow.
 //!
 //! Where they live: `%APPDATA%\NADI\plugins\<id>\manifest.json`. What is switched on, each plugin's settings, who
 //! is muted and do not disturb are kept in `%APPDATA%\NADI\plugins.json`. A plugin that was just dropped in is off
@@ -37,6 +37,7 @@ const DEFAULT_EVERY: Duration = Duration::from_secs(30);
 const TIME_LIMIT: Duration = Duration::from_secs(5);
 const MAX_ROWS: usize = 12;
 const MAX_BARS: usize = 32;
+const MAX_GRAPH: usize = 120;
 const MAX_TEXT: usize = 200;
 /// a live card, a pill or a ring goes to the screen at most this often
 const LIVE_GAP: Duration = Duration::from_millis(50);
@@ -54,6 +55,15 @@ pub struct Manifest {
     pub kind: String,
     /// a module plugin: its file, in the plugin's folder
     pub module: String,
+    /// a bundle (`"kind": "bundle"`): one plugin in the list, made of modules that each have the permissions of their own. What
+    /// sees this PC and what reaches a host are kept apart that way: a part that reaches a host sees nothing of the PC.
+    pub parts: Vec<PartSpec>,
+    /// plugins of the same repository that this one takes the place of (two plugins that became one): installing it removes them,
+    /// and it is on when one of them was
+    pub replaces: Vec<String>,
+    /// the plugin a part belongs to (set by the host; a part has no folder of its own)
+    #[serde(skip)]
+    pub parent: String,
     pub permissions: Permissions,
     pub source: Source,
     pub card: CardSpec,
@@ -65,14 +75,11 @@ pub struct Manifest {
     /// a module plugin: its card is sent to the screen as it changes (up to about 20 times a second), for a meter
     pub live: bool,
     pub budget: Budget,
-    /// a native plugin: it starts switched on in a new install
+    /// it starts switched on in a new install
     pub default_on: bool,
-    /// a native plugin: it says things in banners (so there is something to mute)
+    /// it says things in banners (so there is something to mute)
     pub banners: bool,
-    /// a native plugin: the pills it may offer (see `Ctx::offer_pill`)
-    pub pills: Vec<PillSpec>,
-    /// buttons that go in the plugin's settings (a native plugin answers them by `Native::call`, a module by an
-    /// `action` event)
+    /// buttons that go in the plugin's settings (a module is told by an `action` event)
     pub actions: Vec<ActionSpec>,
     /// a declarative plugin: the pill it shows while its `when` holds (templates over the data)
     pub pill: Option<PillTpl>,
@@ -87,6 +94,53 @@ pub struct Manifest {
     pub widgets: Vec<WidgetSpec>,
     /// a plugin that draws for itself: scripts that run in frames the island gives them
     pub faces: Vec<FaceSpec>,
+    /// resting islands it offers: the three sections of the collapsed island, filled its own way, for when it has something going on
+    pub rests: Vec<RestSpec>,
+    /// its tile in the open island's grid (a plugin that has cards or something to glance at has one; see tiles.rs)
+    pub tile: Option<TileSpec>,
+}
+
+/// A tile that a plugin has in the open island: a square (a phone's widget) that is always there, with what the plugin is doing
+/// in it, and the plugin's cards as its page when it is pressed. Its face is drawn from the plugin's first card (the `glance` of
+/// it, or its title and its second line), or, with no card, from `idle`.
+#[derive(Deserialize, Serialize, Clone, Default, Debug, PartialEq)]
+#[serde(default)]
+pub struct TileSpec {
+    /// the name it goes by (the plugin's, when none)
+    pub name: String,
+    /// a line icon of the island's
+    pub icon: String,
+    /// `#rrggbb`: the colour of its icon while something is going on
+    pub tint: String,
+    /// what it can be drawn as: "small" (1 x 1), "wide" (a full row), "large" (2 x 2); the first is where it starts
+    pub sizes: Vec<String>,
+    /// what it says while nothing is going on ("nothing playing")
+    pub idle: String,
+    /// a widget of the plugin whose picture is its face, for a wide or a large tile with no card (the system's rings)
+    pub widget: String,
+    /// "date": the face has the date as a block (a calendar); none: the plain face
+    pub look: String,
+    /// a picture in the plugin's folder (a png, gif, webp or jpeg of 512 KB at most): the face of the tile while something is going on, where the card has
+    /// no picture of its own (an animated gif moves)
+    pub picture: String,
+}
+
+/// A resting island that a plugin offers (see rest.rs). The collapsed island always has three sections, one widget in each; a plugin
+/// says what goes in them while it has something going on (its module says when, in its reply: `rest`), and the user may change it.
+#[derive(Deserialize, Serialize, Clone, Default, Debug, PartialEq)]
+#[serde(default)]
+pub struct RestSpec {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    /// the line that tells the user when it is on ("While something plays")
+    pub when: String,
+    /// when two want the island, the higher one wins
+    pub priority: i32,
+    /// a widget for each section: `widget` of this plugin, or `plugin:widget` of another; empty for none
+    pub left: String,
+    pub center: String,
+    pub right: String,
 }
 
 /// A face a plugin brings: a script of its own that draws in a frame the island gives it (see `ui/faces.js`). The frame is
@@ -117,6 +171,8 @@ pub struct FaceSpec {
 #[derive(Deserialize, Serialize, Clone, Default, Debug)]
 #[serde(default)]
 pub struct WidgetSpec {
+    /// the part of a bundle that draws it (empty: the first)
+    pub part: String,
     pub id: String,
     pub name: String,
     /// "left", "center" or "right"
@@ -135,6 +191,8 @@ pub struct WidgetSpec {
 pub struct Surface {
     pub widgets: serde_json::Map<String, Value>,
     pub pane: Option<Value>,
+    /// the resting islands (ids from its manifest) that it says are on now
+    pub rest: Vec<String>,
 }
 
 /// The pill of a declarative plugin: shown while `when` is true (any text but "", "0" and "false").
@@ -163,23 +221,27 @@ pub struct RingTpl {
     pub tip: String,
 }
 
+/// One module of a bundle: its own file, permissions and budget.
 #[derive(Deserialize, Clone, Default, Debug)]
 #[serde(default)]
-pub struct PillSpec {
+pub struct PartSpec {
+    /// a name that is only the part's (letters, digits, `-`): it makes the part's id, `<plugin>-<part>`
     pub id: String,
-    /// the size at the standard collapsed width (260 px), logical px
-    pub w: f64,
-    pub h: f64,
-    /// who wins when several are offered (the highest)
-    pub rank: i32,
-    /// it comes by itself and is looked at (like a banner): it does not slide away on its own, and a pinned island does
-    /// not shrink under it
-    pub brief: bool,
+    pub module: String,
+    /// the crate that makes the module, for the build script of the plugins repository
+    #[serde(rename = "crate")]
+    pub krate: String,
+    pub permissions: Permissions,
+    pub budget: Budget,
+    pub live: bool,
+    pub tick: String,
 }
 
 #[derive(Deserialize, Clone, Default, Debug)]
 #[serde(default)]
 pub struct ActionSpec {
+    /// the part of a bundle that answers it (empty: the first)
+    pub part: String,
     pub id: String,
     pub label: String,
     /// the action needs a word from the user (a code to paste): this is what the field asks, and `then` is the call
@@ -256,21 +318,21 @@ pub struct Permissions {
     pub programs: bool,
     /// a module may keep a small file of its own (up to 64 KB)
     pub storage: bool,
+    /// a module may watch up to four programs (by the `watch` of its reply) and be told what each uses: CPU, memory, graphics,
+    /// video memory, frames per second
+    pub usage: bool,
+    /// a module may be told what the browsers, Steam and qBittorrent are downloading (names and progress), and have a finished
+    /// one shown in its folder
+    pub downloads: bool,
+    /// a module may be told what the Claude Code sessions on this PC are doing (their titles, folders, prompts and tool calls)
+    pub claude: bool,
+    /// a module may be told what the pages open in the browsers are (through the NADI browser extension), and have a button pressed
+    /// or a tab sent to another page of its site
+    pub browser: bool,
     /// command lines a module may have run, each as its manifest writes it (`git -C * status`: `*` is one argument it picks)
     pub run: Vec<String>,
     /// a module may have a banner open a link that starts with one of these (`viber://`, `https://discord.com/`)
     pub open: Vec<String>,
-    /// a native plugin says in words what it looks at (shown when it is switched on)
-    pub sees: Vec<Sees>,
-}
-
-#[derive(Deserialize, Clone, Default, Debug)]
-#[serde(default)]
-pub struct Sees {
-    pub name: String,
-    /// what it is of (`use CLI`: the command)
-    pub detail: String,
-    pub why: String,
 }
 
 #[derive(Deserialize, Clone, Default, Debug)]
@@ -325,8 +387,30 @@ pub enum Block {
     Progress { value: f64 },
     /// a row of meters, each 0 to 1 (a level, the bands of a sound)
     Bars { values: Vec<f64> },
-    Text { text: String },
+    /// a paragraph; with a `label` it opens with that in bold ("Prompt")
+    Text {
+        text: String,
+        #[serde(default)]
+        label: String,
+    },
     Badge { text: String },
+    /// rows with a line icon and a short text; the one that is `now` is lit (what a session is doing, and what it did)
+    Lines { rows: Vec<Line> },
+    /// a label, a bar, and what it says (`color` is `#rrggbb`)
+    Meter { label: String, value: f64, text: String, color: String },
+    /// a few numbers, each with its name under it
+    Stats { items: Vec<Stat> },
+    /// a picture the browser extension sent (a page's main picture), by its id: the island fetches it itself (only for a plugin
+    /// that may see the browser)
+    Picture { id: u64 },
+    /// a guide laid out to be read, by its key (see `browsersensor`): the island fetches the words itself and draws the contents,
+    /// a search, the size of the text, and the buttons to the sections before and after (they call the plugin back with `go`).
+    /// `image` is the page's main picture, which the reader places beside the text.
+    Reader {
+        key: String,
+        #[serde(default)]
+        image: Option<u64>,
+    },
     Facts { rows: Vec<(String, String)> },
     List { rows: Vec<Row> },
     /// buttons: each one calls the plugin back (`action`)
@@ -335,7 +419,65 @@ pub enum Block {
     Image { src: String },
     /// a thin bar you can press: `value` is how far (0 to 1), and a press calls the plugin back (`action`, with the
     /// place pressed as `fraction`, 0 to 1)
-    Seek { value: f64, action: String },
+    /// `before` and `after` are buttons at its sides (the player's jump back and forward, its speed)
+    Seek {
+        value: f64,
+        action: String,
+        #[serde(default)]
+        before: Vec<Button>,
+        #[serde(default)]
+        after: Vec<Button>,
+    },
+    /// a line through numbers, oldest first (frame times, a speed): drawn from `0` to `max`, with a faint line at each of `marks`
+    Graph { values: Vec<f64>, max: f64, marks: Vec<f64> },
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(default)]
+pub struct Line {
+    pub icon: String,
+    pub text: String,
+    pub now: bool,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(default)]
+pub struct Stat {
+    pub value: String,
+    pub label: String,
+}
+
+/// A tile of a letter or a word in a colour, with a ring around it (how full something is): what a card, a pill or a brief
+/// shows in place of an icon.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(default)]
+pub struct Tile {
+    /// one or two letters
+    pub text: String,
+    /// `#rrggbb`
+    pub color: String,
+    /// 0 to 1: how far the ring goes round (none: no ring)
+    pub ring: Option<f64>,
+    /// `#rrggbb`
+    pub ring_color: String,
+}
+
+/// A small icon at the right of a header, with what it says when hovered.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(default)]
+pub struct Badge {
+    pub icon: String,
+    pub tip: String,
+}
+
+/// A row of a pill that shows how far something is: a label, a bar and its number. The bar moves when the number does.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(default)]
+pub struct PillRow {
+    pub label: String,
+    /// 0 to 1
+    pub value: f64,
+    pub text: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
@@ -372,7 +514,29 @@ pub struct CardOut {
     pub peek: String,
     /// a picture for the card's tile (a `data:` raster), or "keep": the one it had
     pub image: String,
+    /// buttons in the header, at the right (a player's previous, play and next): up to 3
+    pub controls: Vec<Button>,
+    /// a letter in a colour, with a ring, in place of the icon
+    pub tile: Option<Tile>,
+    /// a line icon before the second line (what it is doing)
+    pub sub_icon: String,
+    /// how it stands: "", "waiting" (it needs you), "working", "finished" or "idle". The card is marked for it, and its icon is at the right.
+    pub tone: String,
+    /// small icons at the right of the header
+    pub badges: Vec<Badge>,
+    /// an action the plugin is called with when the card's icon is pressed (go to the thing the card is about)
+    pub focus: String,
+    /// what its tile says at a glance: a big word or number and a few words under it
+    pub glance: Option<Glance>,
     pub body: Vec<Block>,
+}
+
+/// What a card's tile says at a glance ("1" and "needs you", "144" and "fps").
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(default)]
+pub struct Glance {
+    pub big: String,
+    pub caption: String,
 }
 
 /// The pill a plugin offers while something is going on (what is playing, a game, a timer). The collapsed island shows
@@ -402,6 +566,11 @@ pub struct PillOut {
     pub h: f64,
     /// "" or "big" (large light digits, as the time is shown)
     pub look: String,
+    /// it comes by itself and is looked at, like a banner: the island drops down for it, and it can outrank the others (up to 100)
+    pub brief: bool,
+    /// rows of a label, a bar and a number (a limit that moved), in place of the text
+    pub rows: Vec<PillRow>,
+    pub tile: Option<Tile>,
 }
 
 /// A ring a plugin adds to the hub's top right.
@@ -662,7 +831,7 @@ fn block_of(spec: &Value, ctx: &Value) -> Option<Block> {
     }
     if let Some(t) = o.get("text").and_then(|x| x.as_str()) {
         let text = render(t, ctx);
-        return (!text.trim().is_empty()).then_some(Block::Text { text });
+        return (!text.trim().is_empty()).then_some(Block::Text { text, label: String::new() });
     }
     if let Some(t) = o.get("badge").and_then(|x| x.as_str()) {
         let text = render(t, ctx);
@@ -717,6 +886,20 @@ fn image_ok(src: &str) -> bool {
     src.len() <= MAX_IMAGE && ["data:image/png;base64,", "data:image/jpeg;base64,", "data:image/webp;base64,", "data:image/gif;base64,"].iter().any(|p| src.starts_with(p))
 }
 
+/// A widget that says its picture is "keep" shows the one it showed last (a picture is sent once, not with every reply).
+fn keep_tiles(new: &mut Value, old: Option<&Value>) {
+    let was = old.and_then(|o| o.get("blocks")).and_then(|b| b.as_array()).and_then(|a| a.iter().find_map(|b| b.get("item").and_then(|i| i.get("tile")).and_then(|t| t.as_str()))).unwrap_or("").to_string();
+    if let Some(blocks) = new.get_mut("blocks").and_then(|b| b.as_array_mut()) {
+        for b in blocks {
+            if let Some(t) = b.get_mut("item").and_then(|i| i.get_mut("tile")) {
+                if t.as_str() == Some("keep") {
+                    *t = json!(was);
+                }
+            }
+        }
+    }
+}
+
 fn cut_text(s: &mut String) {
     if s.chars().count() > MAX_TEXT {
         *s = s.chars().take(MAX_TEXT - 1).collect::<String>() + "…";
@@ -742,6 +925,13 @@ pub fn card_of(m: &Manifest, ctx: &Value) -> CardOut {
         sub: render(&m.card.sub, ctx),
         peek: render(&m.card.peek, ctx),
         image: String::new(),
+        controls: Vec::new(),
+        tile: None,
+        sub_icon: String::new(),
+        tone: String::new(),
+        badges: Vec::new(),
+        focus: String::new(),
+        glance: None,
         body: m.card.body.iter().filter_map(|b| block_of(b, ctx)).collect(),
     }
 }
@@ -762,13 +952,39 @@ pub fn clean_card(m: &Manifest, v: &Value) -> Option<CardOut> {
     if c.image != "keep" && !image_ok(&c.image) {
         c.image.clear();
     }
+    clean_buttons(&mut c.controls);
+    c.controls.truncate(3);
+    clean_tile(&mut c.tile);
+    clean_badges(&mut c.badges);
+    c.focus.truncate(64);
+    c.sub_icon.truncate(24);
+    if let Some(g) = c.glance.as_mut() {
+        g.big = g.big.chars().take(12).collect();
+        g.caption = g.caption.chars().take(40).collect();
+    }
+    if !matches!(c.tone.as_str(), "waiting" | "working" | "finished" | "idle") {
+        c.tone.clear();
+    }
     c.body.truncate(8);
     for b in c.body.iter_mut() {
         match b {
             Block::Progress { value } => *value = if value.is_finite() { value.clamp(0.0, 1.0) } else { 0.0 },
-            Block::Seek { value, action } => {
+            Block::Seek { value, action, before, after } => {
                 *value = if value.is_finite() { value.clamp(0.0, 1.0) } else { 0.0 };
                 action.truncate(64);
+                clean_buttons(before);
+                clean_buttons(after);
+                before.truncate(2);
+                after.truncate(3);
+            }
+            Block::Graph { values, max, marks } => {
+                values.truncate(MAX_GRAPH);
+                for v in values.iter_mut() {
+                    *v = if v.is_finite() { v.max(0.0) } else { 0.0 };
+                }
+                *max = if max.is_finite() && *max > 0.0 { *max } else { values.iter().copied().fold(1.0, f64::max) };
+                marks.truncate(4);
+                marks.retain(|m| m.is_finite() && *m >= 0.0);
             }
             Block::Bars { values } => {
                 values.truncate(MAX_BARS);
@@ -776,7 +992,35 @@ pub fn clean_card(m: &Manifest, v: &Value) -> Option<CardOut> {
                     *v = if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
                 }
             }
-            Block::Text { text } | Block::Badge { text } => cut(text),
+            Block::Text { text, label } => {
+                cut(text);
+                cut(label);
+            }
+            Block::Badge { text } => cut(text),
+            Block::Lines { rows } => {
+                rows.truncate(8);
+                for r in rows.iter_mut() {
+                    cut(&mut r.text);
+                    r.icon.truncate(24);
+                }
+            }
+            Block::Meter { label, value, text, color } => {
+                cut(label);
+                cut(text);
+                *value = unit(*value);
+                if !hex_ok(color) {
+                    *color = String::new();
+                }
+            }
+            Block::Picture { .. } => {}
+            Block::Reader { key, .. } => key.retain(|c| c.is_ascii_alphanumeric()),
+            Block::Stats { items } => {
+                items.truncate(6);
+                for s in items.iter_mut() {
+                    cut(&mut s.value);
+                    cut(&mut s.label);
+                }
+            }
             Block::Facts { rows } => {
                 rows.truncate(MAX_ROWS);
                 for (k, v) in rows.iter_mut() {
@@ -800,10 +1044,38 @@ pub fn clean_card(m: &Manifest, v: &Value) -> Option<CardOut> {
             }
         }
     }
-    // (a picture that is not one is left out)
+    // (a picture that is not one is left out; what the browser sent is for a plugin that may see the browser)
     c.body.retain(|b| !matches!(b, Block::Image { src } if src.is_empty()));
+    c.body.retain(|b| m.permissions.browser || !matches!(b, Block::Picture { .. } | Block::Reader { .. }));
+    c.body.retain(|b| !matches!(b, Block::Reader { key, .. } if key.is_empty()));
     c.body.retain(|b| !matches!(b, Block::Buttons { items } if items.is_empty()));
     Some(c)
+}
+
+/// `#rrggbb` (a colour goes into a style, so nothing else may)
+pub(crate) fn hex_ok(c: &str) -> bool {
+    c.len() == 7 && c.starts_with('#') && c[1..].chars().all(|x| x.is_ascii_hexdigit())
+}
+
+pub(crate) fn clean_tile(t: &mut Option<Tile>) {
+    if let Some(x) = t.as_mut() {
+        x.text = x.text.chars().take(2).collect();
+        if !hex_ok(&x.color) {
+            x.color = "#9a9aa2".into();
+        }
+        x.ring = x.ring.filter(|r| r.is_finite()).map(unit);
+        if !hex_ok(&x.ring_color) {
+            x.ring_color = "#5ac88c".into();
+        }
+    }
+}
+
+pub(crate) fn clean_badges(b: &mut Vec<Badge>) {
+    b.truncate(4);
+    for x in b.iter_mut() {
+        x.icon.truncate(24);
+        cut_text(&mut x.tip);
+    }
 }
 
 fn clean_buttons(items: &mut Vec<Button>) {
@@ -830,7 +1102,14 @@ pub fn clean_pill(m: &Manifest, v: &Value) -> Option<PillOut> {
         p.image.clear();
     }
     // (below the games and the like, never above a peek that has to be seen)
-    p.rank = p.rank.clamp(0, 99);
+    p.rank = p.rank.clamp(0, if p.brief { 100 } else { 99 });
+    p.rows.truncate(3);
+    for r in p.rows.iter_mut() {
+        cut_text(&mut r.label);
+        cut_text(&mut r.text);
+        r.value = unit(r.value);
+    }
+    clean_tile(&mut p.tile);
     p.w = if p.w > 0.0 { p.w.clamp(200.0, 360.0) } else { 260.0 };
     p.h = if p.h > 0.0 { p.h.clamp(32.0, 72.0) } else if p.sub.is_empty() { 40.0 } else { 48.0 };
     p.progress = p.progress.filter(|x| x.is_finite()).map(unit);
@@ -1099,13 +1378,12 @@ pub(crate) struct Saved {
     pub(crate) muted: Vec<String>,
     pub(crate) dnd: bool,
     pub(crate) values: HashMap<String, HashMap<String, Value>>,
-    /// the native plugins that took over what the old settings said about them (once each)
-    pub(crate) adopted: Vec<String>,
     /// the question about the plugins that moved out of the app (Time, Calendar) was answered
     pub(crate) moved_asked: bool,
 }
 
 impl Plugin {
+
     pub(crate) fn new(manifest: Manifest, dir: PathBuf, problem: Option<String>) -> Plugin {
         Plugin {
             manifest,
@@ -1132,15 +1410,6 @@ impl Plugin {
         }
     }
 
-    /// A plugin that is part of the app, written in Rust (see native.rs): no folder, nothing to check.
-    pub(crate) fn built_in(manifest: Manifest) -> Plugin {
-        Plugin::new(manifest, PathBuf::new(), None)
-    }
-
-    pub fn card_slot(&self) -> std::sync::MutexGuard<'_, Option<CardOut>> {
-        self.card.lock().unwrap()
-    }
-
     pub fn set_note(&self, n: Option<String>) {
         *self.note.lock().unwrap() = n;
     }
@@ -1157,9 +1426,7 @@ pub struct Host {
     loaded: AtomicBool,
     /// the loopback audio, for the plugins that may hear it (see pluginwasm.rs)
     pub audio: crate::pluginwasm::AudioBus,
-    /// the plugins that are part of the app (see native.rs)
-    pub(crate) natives: Mutex<Vec<crate::native::Entry>>,
-    /// the pill each plugin offers right now (see `native::Ctx::offer_pill`)
+    /// the pill each plugin offers right now
     pub(crate) offers: Mutex<HashMap<String, Offer>>,
     /// plugins that ask the island to stay out of the way (a game is on the screen)
     pub(crate) quiet: Mutex<std::collections::HashSet<String>>,
@@ -1192,6 +1459,18 @@ fn perm(name: &str, detail: impl Into<String>) -> Perm {
 
 /// What a plugin asks for, as the permissions the app knows (and what each grants, in the app's words).
 pub fn permissions_of(m: &Manifest) -> Vec<Perm> {
+    // (a bundle asks for what its parts ask for, each told: it is one plugin to switch on)
+    if m.kind == "bundle" {
+        let mut all: Vec<Perm> = Vec::new();
+        for part in parts_of(m) {
+            for p in permissions_of(&part) {
+                if !all.iter().any(|x| x.name == p.name && x.detail == p.detail) {
+                    all.push(p);
+                }
+            }
+        }
+        return all;
+    }
     let mut out: Vec<Perm> = Vec::new();
     for h in &m.permissions.net {
         // (a host that is a setting: it is the address the user gave, under that setting's name)
@@ -1215,6 +1494,10 @@ pub fn permissions_of(m: &Manifest) -> Vec<Perm> {
         (m.permissions.idle, "idle time"),
         (m.permissions.programs, "program details"),
         (m.permissions.storage, "storage"),
+        (m.permissions.usage, "performance"),
+        (m.permissions.downloads, "downloads"),
+        (m.permissions.claude, "claude sessions"),
+        (m.permissions.browser, "browser extension"),
     ] {
         if on {
             out.push(perm(name, ""));
@@ -1228,13 +1511,6 @@ pub fn permissions_of(m: &Manifest) -> Vec<Perm> {
     }
     for r in &m.permissions.run {
         out.push(perm("use CLI", r.clone()));
-    }
-    for x in &m.permissions.sees {
-        let mut p = perm(&x.name, x.detail.clone());
-        if p.why.is_empty() {
-            p.why = x.why.clone();
-        }
-        out.push(p);
     }
     out
 }
@@ -1265,6 +1541,8 @@ pub struct ActionSpec2 {
 
 #[derive(Serialize)]
 pub struct Info {
+    /// a part of a bundle: it is not a plugin of the list (the bundle is), but the head and the faces need to know it
+    pub hidden: bool,
     pub id: String,
     pub name: String,
     pub description: String,
@@ -1277,12 +1555,10 @@ pub struct Info {
     pub actions: Vec<ActionSpec2>,
     /// it can say things in banners: the mute button has something to do
     pub banners: bool,
-    /// it is part of the app (written in Rust)
-    pub bundled: bool,
     /// what the module costs when it runs ("0.4 ms a call")
     pub cost: Option<String>,
     pub error: Option<String>,
-    /// a native plugin's line about how it is doing ("waiting for the browser extension")
+    /// a plugin's line about how it is doing ("waiting for the browser extension")
     pub note: Option<String>,
     /// the repository it was installed from, and the version of it ("Llyme/nadi-plugins v1.2.0": see `repo.rs`)
     pub from: Option<String>,
@@ -1290,6 +1566,9 @@ pub struct Info {
     pub widgets: Vec<WidgetSpec>,
     /// the faces it draws with
     pub faces: Vec<FaceSpec>,
+    /// the resting islands it offers
+    pub rests: Vec<RestSpec>,
+    pub tile: Option<TileSpec>,
 }
 
 #[derive(Serialize)]
@@ -1301,7 +1580,13 @@ pub struct Listing {
 }
 
 /// The plugins the app used to carry inside it, and now come from the repository.
-pub const MOVED: [(&str, &str); 8] = [("ics-calendar", "Calendar"), ("time", "Time"), ("system-meters", "System meters"), ("sound-light", "Sound light"), ("now-playing", "Now playing"), ("eyes", "Eyes"), ("toasts", "Notification mirror"), ("work", "Work")];
+pub const MOVED: [(&str, &str); 12] = [("page-reader", "Page Reader"), ("claude", "Claude"), ("games", "Games"), ("downloads", "Downloads"), ("ics-calendar", "Calendar"), ("time", "Time"), ("system-meters", "System meters"), ("sound-light", "Sound light"), ("now-playing", "Now playing"), ("eyes", "Eyes"), ("toasts", "Notification mirror"), ("work", "Work")];
+
+/// Was this plugin on before it left the app? (The usage rings were a part of Claude Code: whoever had that has this too.)
+fn was_on(on: &[String], id: &str) -> bool {
+    let id = if id == "claude" { "claude-code" } else { id };
+    on.iter().any(|x| x == id)
+}
 
 pub(crate) fn dir() -> Option<PathBuf> {
     Some(crate::settings::data_dir()?.join("plugins"))
@@ -1321,7 +1606,7 @@ pub(crate) fn values_of(m: &Manifest, saved: &Saved) -> Value {
     for (k, spec) in &m.settings {
         out.insert(k.clone(), spec.default.clone());
     }
-    if let Some(v) = saved.values.get(&m.id) {
+    if let Some(v) = saved.values.get(if m.parent.is_empty() { &m.id } else { &m.parent }) {
         for (k, val) in v {
             if m.settings.contains_key(k) {
                 out.insert(k.clone(), val.clone());
@@ -1355,7 +1640,16 @@ fn check(m: &Manifest, dir: &std::path::Path) -> Option<String> {
         || m.permissions.calendar
         || m.permissions.media
         || m.permissions.media_control
-        || m.permissions.system;
+        || m.permissions.system
+        || m.permissions.cursor
+        || m.permissions.notifications
+        || m.permissions.idle
+        || m.permissions.programs
+        || m.permissions.usage
+        || m.permissions.downloads
+        || m.permissions.claude
+        || m.permissions.browser
+        || !m.permissions.run.is_empty();
     match m.kind.as_str() {
         "wasm" => {
             let f = m.module.trim();
@@ -1389,9 +1683,26 @@ fn check(m: &Manifest, dir: &std::path::Path) -> Option<String> {
                 }
                 return allowed(&probe, &net_hosts(m, &defaults)).err();
             }
-            if !m.permissions.net.is_empty() {
-                // (no module can reach the network: what it sees stays on this PC)
-                return Some("A module cannot ask the network. Use a declarative plugin for that.".into());
+            if !m.permissions.net.is_empty() && sees_the_pc {
+                // (what a module sees stays on this PC: one that reaches a host sees nothing of it, so it has nothing to carry out)
+                return Some("A module that reaches the network cannot also see this PC. Split it in two.".into());
+            }
+            None
+        }
+        "bundle" => {
+            if m.parts.is_empty() {
+                return Some("A bundle lists its parts (\"parts\": [...]).".into());
+            }
+            let mut ids: Vec<&str> = Vec::new();
+            for (part, child) in m.parts.iter().zip(parts_of(m)) {
+                if part.id.is_empty() || !part.id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') || ids.contains(&part.id.as_str()) {
+                    return Some("Each part of a bundle has a name of its own (lower case letters, digits, '-').".into());
+                }
+                ids.push(&part.id);
+                // (each part is a module of its own: the one that reaches a host sees nothing of this PC)
+                if let Some(p) = check(&child, dir) {
+                    return Some(format!("The part {}: {p}", part.id));
+                }
             }
             None
         }
@@ -1489,6 +1800,45 @@ pub(crate) fn inspect(folder: &std::path::Path) -> Option<(Manifest, Option<Stri
     Some((p.manifest, p.problem))
 }
 
+/// The parts of a bundle, each as the module plugin it is for the host: the bundle's name, settings and switch, its own file,
+/// permissions, widgets and actions. They are not listed; the head, the cards and the sensors know them by their ids.
+pub(crate) fn parts_of(m: &Manifest) -> Vec<Manifest> {
+    let first = m.parts.first().map(|p| p.id.clone()).unwrap_or_default();
+    m.parts
+        .iter()
+        .map(|p| Manifest {
+            id: format!("{}-{}", m.id, p.id),
+            name: m.name.clone(),
+            description: m.description.clone(),
+            version: m.version.clone(),
+            kind: "wasm".into(),
+            module: p.module.clone(),
+            permissions: p.permissions.clone(),
+            budget: p.budget.clone(),
+            live: p.live,
+            tick: p.tick.clone(),
+            source: Source { when: "always".into(), ..Default::default() },
+            settings: m.settings.clone(),
+            banners: true,
+            widgets: m.widgets.iter().filter(|w| w.part == p.id || (w.part.is_empty() && p.id == first)).cloned().collect(),
+            actions: m.actions.iter().filter(|a| a.part == p.id || (a.part.is_empty() && p.id == first)).cloned().collect(),
+            // (the islands are the bundle's, and a part may say that one is on: the replies are checked against them)
+            rests: m.rests.clone(),
+            parent: m.id.clone(),
+            ..Default::default()
+        })
+        .collect()
+}
+
+/// A plugin's folder, read: the plugin, and the parts it is made of when it is a bundle.
+fn read_all(path: &std::path::Path) -> Vec<Plugin> {
+    let Some(p) = read_one(path) else { return Vec::new() };
+    let parts: Vec<Plugin> = if p.problem.is_none() && p.manifest.kind == "bundle" { parts_of(&p.manifest).into_iter().map(|m| Plugin::new(m, p.dir.clone(), None)).collect() } else { Vec::new() };
+    let mut out = vec![p];
+    out.extend(parts);
+    out
+}
+
 fn read_one(path: &std::path::Path) -> Option<Plugin> {
     let text = std::fs::read_to_string(path).ok()?;
     let folder = path.parent()?;
@@ -1520,16 +1870,14 @@ impl Host {
                 }
             }
         }
-        // (the plugins that are part of the app come first: the ones written in Rust)
-        let mut all: Vec<Arc<Plugin>> = self.natives.lock().unwrap().iter().map(|e| e.plugin.clone()).collect();
+        let mut all: Vec<Arc<Plugin>> = Vec::new();
         let mut found: Vec<Arc<Plugin>> = Vec::new();
         if let Ok(rd) = std::fs::read_dir(&root) {
             for e in rd.flatten() {
-                if let Some(p) = read_one(&e.path().join("manifest.json")) {
-                    // (one of the app's own ids is the app's: a folder cannot stand in for it)
-                    if !found.iter().any(|x| x.manifest.id == p.manifest.id) && !all.iter().any(|x| x.manifest.id == p.manifest.id) {
-                        found.push(Arc::new(p));
-                    }
+                let read = read_all(&e.path().join("manifest.json"));
+                // (a plugin and its parts come in together, or not at all: one with an id that is taken waits)
+                if !read.is_empty() && !read.iter().any(|r| found.iter().any(|x| x.manifest.id == r.manifest.id)) {
+                    found.extend(read.into_iter().map(Arc::new));
                 }
             }
         }
@@ -1538,7 +1886,7 @@ impl Host {
         // (a plugin that is still there keeps what it has drawn)
         {
             let old = self.plugins.lock().unwrap();
-            for p in all.iter().filter(|p| p.manifest.kind != "native") {
+            for p in all.iter() {
                 if let Some(o) = old.iter().find(|o| o.manifest.id == p.manifest.id) {
                     if o.manifest.source.http == p.manifest.source.http && o.manifest.module == p.manifest.module {
                         *p.card.lock().unwrap() = o.card.lock().unwrap().clone();
@@ -1590,19 +1938,24 @@ impl Host {
                 s.on.push(id.to_string());
             }
         }
-        // (on again later it starts over: no stale card, no banner for what happened meanwhile)
-        for p in self.plugins.lock().unwrap().iter().filter(|p| p.manifest.id == id) {
+        // (on again later it starts over: no stale card, no banner for what happened meanwhile; a bundle's parts with it)
+        let mine = |p: &Arc<Plugin>| p.manifest.id == id || p.manifest.parent == id;
+        let ids: Vec<String> = self.plugins.lock().unwrap().iter().filter(|p| mine(p)).map(|p| p.manifest.id.clone()).collect();
+        for p in self.plugins.lock().unwrap().iter().filter(|p| mine(p)) {
             Self::reset(p);
         }
         self.save();
         if !on {
-            self.offers.lock().unwrap().remove(id);
-            self.quiet.lock().unwrap().remove(id);
+            for i in &ids {
+                self.offers.lock().unwrap().remove(i);
+                self.quiet.lock().unwrap().remove(i);
+            }
         }
-        let entry = self.natives.lock().unwrap().iter().find(|e| e.plugin.manifest.id == id).map(|e| (e.native.clone(), e.ctx.clone()));
-        if let Some((n, ctx)) = entry {
-            n.switched(&ctx, on);
-        }
+    }
+
+    /// A plugin and, when it is a bundle, its parts: the ids that draw for it.
+    pub fn family(&self, id: &str) -> Vec<String> {
+        self.plugins.lock().unwrap().iter().filter(|p| p.manifest.id == id || p.manifest.parent == id).map(|p| p.manifest.id.clone()).collect()
     }
 
     pub fn set_value(&self, id: &str, key: &str, value: Value) {
@@ -1616,10 +1969,6 @@ impl Host {
             *p.due.lock().unwrap() = Instant::now();
         }
         self.save();
-        let entry = self.natives.lock().unwrap().iter().find(|e| e.plugin.manifest.id == id).map(|e| (e.native.clone(), e.ctx.clone()));
-        if let Some((n, ctx)) = entry {
-            n.changed(&ctx, key);
-        }
     }
 
     pub fn set_muted(&self, id: &str, muted: bool) {
@@ -1639,7 +1988,9 @@ impl Host {
     }
 
     pub(crate) fn is_on(&self, p: &Plugin) -> bool {
-        p.problem.is_none() && self.saved.lock().unwrap().on.contains(&p.manifest.id)
+        // (a part is on when its bundle is)
+        let id = if p.manifest.parent.is_empty() { &p.manifest.id } else { &p.manifest.parent };
+        p.problem.is_none() && self.saved.lock().unwrap().on.contains(id)
     }
 
     /// The settings of a plugin, as its templates and its module read them.
@@ -1678,14 +2029,37 @@ impl Host {
         self.plugins.lock().unwrap().iter().filter(|p| self.is_on(p) && p.manifest.kind == "wasm").cloned().collect()
     }
 
+    /// The resting islands the plugins that are on offer: (the plugin, its name, the island).
+    /// The tiles of the plugins that are on: `(plugin id, plugin name, its tile, its folder)`.
+    pub fn tiles(&self) -> Vec<(String, String, TileSpec, PathBuf)> {
+        let all = self.plugins.lock().unwrap().clone();
+        all.iter()
+            .filter(|p| self.is_on(p) && p.problem.is_none() && p.manifest.parent.is_empty())
+            .filter_map(|p| p.manifest.tile.clone().map(|t| (p.manifest.id.clone(), p.manifest.name.clone(), t, p.dir.clone())))
+            .collect()
+    }
+
+    pub fn rests(&self) -> Vec<(String, String, RestSpec)> {
+        let all = self.plugins.lock().unwrap().clone();
+        let mut out = Vec::new();
+        for p in all.iter().filter(|p| self.is_on(p) && p.problem.is_none() && p.manifest.parent.is_empty()) {
+            for r in &p.manifest.rests {
+                if !r.id.is_empty() {
+                    out.push((p.manifest.id.clone(), p.manifest.name.clone(), r.clone()));
+                }
+            }
+        }
+        out
+    }
+
     /// What the plugins that are on have drawn outside their cards (widgets and panes), for a page that has just opened.
     pub fn surfaces(&self) -> Value {
         let all = self.plugins.lock().unwrap().clone();
         let mut out = serde_json::Map::new();
         for p in all.iter().filter(|p| self.is_on(p)) {
             let s = p.surface.lock().unwrap().clone();
-            if !s.widgets.is_empty() || s.pane.is_some() {
-                out.insert(p.manifest.id.clone(), json!({ "widgets": s.widgets, "pane": s.pane }));
+            if !s.widgets.is_empty() || s.pane.is_some() || !s.rest.is_empty() {
+                out.insert(p.manifest.id.clone(), json!({ "widgets": s.widgets, "pane": s.pane, "rest": s.rest }));
             }
         }
         Value::Object(out)
@@ -1696,7 +2070,7 @@ impl Host {
         if let Some(p) = self.plugin(id) {
             if *p.surface.lock().unwrap() != Surface::default() {
                 *p.surface.lock().unwrap() = Surface::default();
-                let _ = app.emit("plugin-surface", json!({ "plugin": id, "widgets": {}, "pane": null, "open": false }));
+                let _ = app.emit("plugin-surface", json!({ "plugin": id, "widgets": {}, "pane": null, "rest": [], "open": false }));
             }
         }
     }
@@ -1711,15 +2085,21 @@ impl Host {
                 let m = &p.manifest;
                 let vals = values_of(m, &saved);
                 let permissions = permissions_of(m);
-                let calls = p.calls.load(Ordering::Relaxed);
-                let cost = (calls > 0).then(|| format!("{:.2} ms a call", p.spent_us.load(Ordering::Relaxed) as f64 / calls as f64 / 1000.0));
+                let bundle = m.kind == "bundle";
+                // (a bundle says for its parts: what they cost, how they do, what went wrong with one)
+                let parts: Vec<&Arc<Plugin>> = if bundle { all.iter().filter(|c| c.manifest.parent == m.id).collect() } else { vec![p] };
+                let calls: u64 = parts.iter().map(|c| c.calls.load(Ordering::Relaxed)).sum();
+                let spent: u64 = parts.iter().map(|c| c.spent_us.load(Ordering::Relaxed)).sum();
+                let cost = (calls > 0).then(|| format!("{:.2} ms a call", spent as f64 / calls as f64 / 1000.0));
+                let on_id = if m.parent.is_empty() { &m.id } else { &m.parent };
                 Info {
+                    hidden: !m.parent.is_empty(),
                     id: m.id.clone(),
                     name: m.name.clone(),
                     description: m.description.clone(),
                     version: m.version.clone(),
-                    kind: if m.kind.is_empty() { "declarative".into() } else { m.kind.clone() },
-                    enabled: saved.on.contains(&m.id),
+                    kind: if m.kind.is_empty() { "declarative".into() } else if bundle { "wasm".into() } else { m.kind.clone() },
+                    enabled: saved.on.contains(on_id),
                     muted: saved.muted.contains(&m.id),
                     permissions,
                     settings: m
@@ -1737,22 +2117,23 @@ impl Host {
                             unit: s.unit.clone(),
                         })
                         .collect(),
-                    actions: m.actions.iter().map(|a| ActionSpec2 { id: a.id.clone(), label: a.label.clone(), ask: a.ask.clone(), then: a.then.clone(), filled: !a.ask.is_empty() && self.filled_of(&m.id, &a.id) }).collect(),
+                    actions: m.actions.iter().map(|a| ActionSpec2 { id: a.id.clone(), label: a.label.clone(), ask: a.ask.clone(), then: a.then.clone(), filled: false }).collect(),
                     banners: m.banners || m.kind == "wasm" || m.attention.is_some(),
-                    bundled: m.kind == "native",
                     cost,
-                    error: p.problem.clone().or_else(|| p.error.lock().unwrap().clone()),
-                    note: if saved.on.contains(&m.id) { self.note_of(&m.id).or_else(|| p.note.lock().unwrap().clone()) } else { None },
-                    from: if m.kind == "native" { None } else { crate::repo::source_of(&p.dir) },
-                    widgets: m.widgets.clone(),
+                    error: p.problem.clone().or_else(|| parts.iter().find_map(|c| c.error.lock().unwrap().clone())),
+                    note: if saved.on.contains(on_id) { parts.iter().find_map(|c| c.note.lock().unwrap().clone()) } else { None },
+                    from: crate::repo::source_of(&p.dir),
+                    widgets: if bundle { Vec::new() } else { m.widgets.clone() },
                     faces: m.faces.clone(),
+                    rests: if bundle { Vec::new() } else { m.rests.clone() },
+                    tile: m.tile.clone(),
                 }
             })
             .collect();
         let moved = if saved.moved_asked {
             Vec::new()
         } else {
-            MOVED.iter().filter(|(id, _)| saved.on.iter().any(|x| x == id) && !all.iter().any(|p| p.manifest.id == *id)).map(|(id, name)| (id.to_string(), name.to_string())).collect()
+            MOVED.iter().filter(|(id, _)| was_on(&saved.on, id) && !all.iter().any(|p| p.manifest.id == *id)).map(|(id, name)| (id.to_string(), name.to_string())).collect()
         };
         Listing { plugins, dnd: saved.dnd, moved }
     }
@@ -1768,37 +2149,18 @@ impl Host {
             .lock()
             .unwrap()
             .iter()
-            .filter(|p| self.is_on(p) && !matches!(p.manifest.kind.as_str(), "native" | "face") && (p.manifest.kind != "wasm" || brings_a_calendar(&p.manifest)))
+            .filter(|p| self.is_on(p) && p.manifest.kind != "face" && (p.manifest.kind != "wasm" || brings_a_calendar(&p.manifest)))
             .filter(|p| seen || p.manifest.source.when == "always")
             .filter(|p| *p.due.lock().unwrap() <= now && !p.busy.load(Ordering::Relaxed))
             .cloned()
             .collect()
     }
 
-    /// Say something on the island for a plugin: it waits by its priority; a muted plugin says nothing; with do not
-    /// disturb only what is 90 or more rings (the rest is in the scrollback). `force`: the user asked for it (they pressed
-    /// the plugin's button), so neither of those applies.
-    pub fn say(&self, app: &AppHandle, state: &IslandState, p: &Plugin, text: String, priority: i32, force: bool) {
-        let (muted, dnd) = {
-            let s = self.saved.lock().unwrap();
-            (s.muted.contains(&p.manifest.id), s.dnd)
-        };
-        if muted && !force {
-            return;
-        }
-        let history = {
-            let mut notif = state.notif.lock().unwrap();
-            notif.push_priority(p.manifest.name.clone(), text, priority.clamp(0, 100), dnd && priority < 90 && !force);
-            notif.history()
-        };
-        let _ = app.emit("notification-history-tick", history);
-    }
-
     /// A banner with what a module said of it: its own title, a link to open, a group.
     fn say_banner(&self, app: &AppHandle, state: &IslandState, p: &Plugin, s: &Say, force: bool) {
         let (muted, dnd) = {
             let sv = self.saved.lock().unwrap();
-            (sv.muted.contains(&p.manifest.id), sv.dnd)
+            (sv.muted.contains(if p.manifest.parent.is_empty() { &p.manifest.id } else { &p.manifest.parent }), sv.dnd)
         };
         if muted && !force {
             return;
@@ -1826,7 +2188,7 @@ impl Host {
 
     /// What one answer of a plugin does to the island (see `Out`). `by_user`: it answers a button the user pressed, so what
     /// it says is shown whatever mute, do not disturb and a busy screen say.
-    pub fn apply(&self, app: &AppHandle, state: &IslandState, p: &Arc<Plugin>, out: Out, by_user: bool) {
+    pub fn apply(&self, app: &AppHandle, state: &IslandState, p: &Arc<Plugin>, mut out: Out, by_user: bool) {
         let id = p.manifest.id.clone();
         if let Some(mut card) = out.card {
             if let Some(c) = card.as_mut().filter(|c| c.image == "keep") {
@@ -1854,7 +2216,7 @@ impl Host {
                 Some(pl) => {
                     // (the page hears what the pill says before the island moves to it)
                     self.flush(app);
-                    let o = Offer { id: pill_node(&id), w: pl.w, h: pl.h, rank: pl.rank, brief: false };
+                    let o = Offer { id: pill_node(&id), w: pl.w, h: pl.h, rank: pl.rank, brief: pl.brief };
                     self.offers.lock().unwrap().insert(id.clone(), o);
                 }
                 None => {
@@ -1877,16 +2239,41 @@ impl Host {
                 }
             });
         }
+        // (requests: each goes on a thread of its own, and its answer waits for the module's next call)
+        for req in out.fetch {
+            let p = p.clone();
+            let hosts = p.manifest.permissions.net.clone();
+            std::thread::spawn(move || {
+                let r = crate::pluginrun::fetch(&hosts, &req);
+                let mut q = p.results.lock().unwrap();
+                q.push(r);
+                if q.len() > 16 {
+                    q.remove(0);
+                }
+            });
+        }
+        if let Some(url) = out.open {
+            if self.may_open_for(p, &url) {
+                crate::winutil::open_url(&url);
+            }
+        }
+        if let Some((exe, title)) = out.focus {
+            crate::focus::focus_source(exe, title, None);
+        }
         if let Some(v) = out.store {
             crate::pluginrun::keep(&id, &v);
         }
         if let Some(modal) = out.modal {
             crate::modal::from_plugin(app, &p.manifest.id, &p.manifest.name, modal);
         }
-        if out.widgets.is_some() || out.pane.is_some() {
-            let (mut widgets, mut pane) = { let s = p.surface.lock().unwrap(); (s.widgets.clone(), s.pane.clone()) };
+        if out.widgets.is_some() || out.pane.is_some() || out.rest.is_some() {
+            let (mut widgets, mut pane, mut rest) = { let s = p.surface.lock().unwrap(); (s.widgets.clone(), s.pane.clone(), s.rest.clone()) };
+            if let Some(r) = out.rest.take() {
+                rest = r;
+            }
             if let Some(w) = out.widgets {
-                for (k, v) in w {
+                for (k, mut v) in w {
+                    keep_tiles(&mut v, widgets.get(&k));
                     widgets.insert(k, v);
                 }
             }
@@ -1894,10 +2281,10 @@ impl Host {
             if let Some(next) = out.pane {
                 pane = next;
             }
-            let now = Surface { widgets, pane };
+            let now = Surface { widgets, pane, rest };
             if *p.surface.lock().unwrap() != now || open {
                 *p.surface.lock().unwrap() = now.clone();
-                let _ = app.emit("plugin-surface", json!({ "plugin": id, "widgets": now.widgets, "pane": now.pane, "open": open }));
+                let _ = app.emit("plugin-surface", json!({ "plugin": id, "widgets": now.widgets, "pane": now.pane, "rest": now.rest, "open": open }));
             }
         }
         if let Some(rings) = out.rings {
@@ -1948,6 +2335,9 @@ impl Host {
                 }
             }
         }
+        for key in out.cancel {
+            state.notif.lock().unwrap().cancel_brief(&format!("plugin:{id}:{key}"));
+        }
         for s in out.say {
             // (ambient: only when nothing fills the screen: not over the hub, not while a game is on)
             if s.ambient && !by_user && (state.hub_is_open() || self.quiet()) {
@@ -1956,16 +2346,24 @@ impl Host {
             match s.pill {
                 None => self.say_banner(app, state, p, &s, by_user),
                 Some(pill) => {
-                    if !by_user && self.gate(&id, s.priority) != crate::native::Gate::Open {
+                    if !by_user && self.gate(&id, s.priority) != crate::plugincalls::Gate::Open {
                         continue;
                     }
+                    let (mut tile, mut badges) = (pill.tile, pill.badges);
+                    clean_tile(&mut tile);
+                    clean_badges(&mut badges);
                     let brief = crate::notify::Brief {
-                        id: format!("plugin:{id}"),
+                        id: if pill.key.is_empty() { format!("plugin:{id}") } else { format!("plugin:{id}:{}", pill.key) },
                         state: "plugin",
                         host_icon: pill.icon,
                         project: pill.right,
                         look: if pill.look == "big" { "big" } else { "" },
                         dwell_ms: pill.ms,
+                        plugin: id.clone(),
+                        tile,
+                        badges,
+                        tone: pill.tone,
+                        press: pill.press,
                         ..Default::default()
                     };
                     state.notif.lock().unwrap().push_brief_priority(s.text, brief, s.priority.clamp(0, 100));
@@ -2035,12 +2433,18 @@ impl Host {
         (pills, rings)
     }
 
-    /// A button the user pressed on a plugin's card or pill: a module is told by an `action` event; a native plugin gets
-    /// the call. (An action a plugin does not know is ignored by it.)
+    /// A button the user pressed on a plugin's card or pill: a module is told by an `action` event.
+    /// (An action a plugin does not know is ignored by it.)
     pub fn act(&self, id: &str, action: &str, args: Value) -> Result<Value, String> {
-        let p = self.plugin(id).ok_or_else(|| format!("no plugin {id}"))?;
+        let mut p = self.plugin(id).ok_or_else(|| format!("no plugin {id}"))?;
         if !self.is_on(&p) {
             return Err(format!("{id} is off"));
+        }
+        // (a bundle: the part that answers the action, by what its manifest says of it; else the first)
+        if p.manifest.kind == "bundle" {
+            let parts = parts_of(&p.manifest);
+            let name = parts.iter().find(|c| c.actions.iter().any(|a| a.id == action || a.then == action)).or(parts.first()).map(|c| c.id.clone());
+            p = name.and_then(|n| self.plugin(&n)).ok_or_else(|| format!("{id} has no part to answer"))?;
         }
         if p.manifest.kind == "wasm" {
             let mut q = p.actions.lock().unwrap();
@@ -2048,9 +2452,6 @@ impl Host {
                 q.push_back((action.chars().take(64).collect(), args));
             }
             return Ok(Value::Null);
-        }
-        if p.manifest.kind == "native" {
-            return self.call(id, action, &args);
         }
         Err(format!("{id} takes no actions"))
     }
@@ -2084,6 +2485,14 @@ pub struct SayPill {
     pub look: String,
     /// how long it stays, ms (0 for the usual)
     pub ms: u64,
+    /// a name of its own: a brief with the same key replaces the one that waits, and `cancel` takes it away
+    pub key: String,
+    pub tile: Option<Tile>,
+    pub badges: Vec<Badge>,
+    /// "" or "waiting" or "finished" (the glow and the icon at the right)
+    pub tone: String,
+    /// what pressing it asks of the module (an `action` event)
+    pub press: String,
 }
 
 /// What one answer of a plugin asks of the island, from a module's reply or from a declarative plugin's data run through
@@ -2114,6 +2523,22 @@ pub struct Out {
     pub run: Vec<(String, Vec<String>)>,
     /// what it keeps (`permissions.storage`)
     pub store: Option<Value>,
+    /// the programs it wants to watch (`permissions.usage`): their process ids, up to four
+    pub watch: Option<Vec<u32>>,
+    /// a file the downloads sensor told it of, to be shown in its folder (`permissions.downloads`)
+    pub reveal: Option<String>,
+    /// which of its resting islands are on now (its manifest's ids; an empty list: none)
+    pub rest: Option<Vec<String>>,
+    /// what it asks of the browser extension (`permissions.browser`): `config`, `watch`, `press`, `go`
+    pub browser: Option<Value>,
+    /// the briefs (by their `key`) that are not needed any more
+    pub cancel: Vec<String>,
+    /// requests to the hosts its manifest names (`permissions.net`): each answers with a `fetched` event
+    pub fetch: Vec<Value>,
+    /// a link to open now, one that starts with what `permissions.open` lists
+    pub open: Option<String>,
+    /// bring a window to the front (`permissions.programs`): (the program's path, a word of its title)
+    pub focus: Option<(Option<String>, Option<String>)>,
 }
 
 /// the name the page gives a plugin's pill (`#pg-<id>`)
@@ -2151,6 +2576,11 @@ pub fn out_of(m: &Manifest, reply: &Value) -> Out {
                 right: get("right"),
                 look: get("look"),
                 ms: p.get("ms").and_then(|v| v.as_u64()).unwrap_or(0),
+                key: p.get("key").and_then(|v| v.as_str()).unwrap_or("").chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | ':' | '.')).take(60).collect(),
+                tile: p.get("tile").and_then(|t| serde_json::from_value::<Tile>(t.clone()).ok()),
+                badges: p.get("badges").and_then(|b| serde_json::from_value::<Vec<Badge>>(b.clone()).ok()).unwrap_or_default(),
+                tone: p.get("tone").and_then(|v| v.as_str()).filter(|t| matches!(*t, "waiting" | "finished")).unwrap_or("").to_string(),
+                press: p.get("press").and_then(|v| v.as_str()).unwrap_or("").chars().take(64).collect(),
             });
             out.say.push(Say {
                 text,
@@ -2179,6 +2609,10 @@ pub fn out_of(m: &Manifest, reply: &Value) -> Out {
         }
         out.widgets = Some(map);
     }
+    if let Some(r) = o.get("rest").and_then(|r| r.as_array()) {
+        // (only the islands its manifest lists)
+        out.rest = Some(r.iter().filter_map(|x| x.as_str()).filter(|x| m.rests.iter().any(|s| s.id == *x)).take(8).map(str::to_string).collect());
+    }
     if let Some(pane) = o.get("pane") {
         out.pane = Some(pane.as_object().map(|p| {
             let t = |k: &str, n: usize| p.get(k).and_then(|v| v.as_str()).unwrap_or("").chars().take(n).collect::<String>();
@@ -2187,7 +2621,7 @@ pub fn out_of(m: &Manifest, reply: &Value) -> Out {
     }
     if let Some(list) = o.get("cards_more") {
         let mut cards: Vec<CardOut> = Vec::new();
-        for (i, c) in list.as_array().map(|a| &a[..a.len().min(5)]).unwrap_or(&[]).iter().enumerate() {
+        for (i, c) in list.as_array().map(|a| &a[..a.len().min(7)]).unwrap_or(&[]).iter().enumerate() {
             if let Some(mut card) = clean_card(m, c) {
                 // (each has a name of its own: the one it says, or its place in the list)
                 let id: String = c.get("id").and_then(|v| v.as_str()).unwrap_or("").chars().filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_')).take(24).collect();
@@ -2206,8 +2640,51 @@ pub fn out_of(m: &Manifest, reply: &Value) -> Out {
             }
         }
     }
+    if m.kind == "wasm" && !m.permissions.net.is_empty() {
+        for r in o.get("fetch").and_then(|f| f.as_array()).map(|a| &a[..a.len().min(2)]).unwrap_or(&[]) {
+            let url = r.get("url").and_then(|u| u.as_str()).unwrap_or("");
+            let id: String = r.get("id").and_then(|i| i.as_str()).unwrap_or("").chars().take(40).collect();
+            if !id.is_empty() && crate::pluginrun::net_allows(&m.permissions.net, url) {
+                out.fetch.push(json!({ "id": id, "method": r.get("method").cloned().unwrap_or(Value::Null), "url": url, "headers": r.get("headers").cloned().unwrap_or(Value::Null), "body": r.get("body").cloned().unwrap_or(Value::Null) }));
+            }
+        }
+    }
+    if m.permissions.browser {
+        out.browser = o.get("browser").filter(|b| b.is_object()).map(|b| {
+            let s = |v: Option<&Value>, n: usize| v.and_then(|x| x.as_str()).unwrap_or("").chars().take(n).collect::<String>();
+            let mut clean = serde_json::Map::new();
+            if let Some(c) = b.get("config").filter(|c| c.is_object()) {
+                clean.insert("config".into(), c.clone());
+            }
+            if let Some(w) = b.get("watch").and_then(|w| w.as_array()) {
+                let list: Vec<Value> = w.iter().take(8).filter_map(|p| Some(json!([s(p.get(0), 40), s(p.get(1), 300)]))).collect();
+                clean.insert("watch".into(), Value::Array(list));
+            }
+            if let Some(p) = b.get("press").filter(|p| p.is_object()) {
+                clean.insert("press".into(), json!({ "id": s(p.get("id"), 40), "browser": s(p.get("browser"), 40), "label": s(p.get("label"), 60) }));
+            }
+            if let Some(g) = b.get("go").filter(|g| g.is_object()) {
+                clean.insert("go".into(), json!({ "id": s(g.get("id"), 40), "browser": s(g.get("browser"), 40), "title": s(g.get("title"), 300), "url": s(g.get("url"), 1000) }));
+            }
+            Value::Object(clean)
+        });
+    }
+    out.cancel = o.get("cancel").and_then(|c| c.as_array()).map(|a| a.iter().filter_map(|k| k.as_str()).take(8).map(|k| k.chars().take(60).collect()).collect()).unwrap_or_default();
+    out.open = o.get("open").and_then(|u| u.as_str()).map(|u| u.trim().chars().take(300).collect::<String>()).filter(|u| !u.is_empty());
+    if m.permissions.programs {
+        if let Some(f) = o.get("focus").and_then(|f| f.as_object()) {
+            let s = |k: &str| f.get(k).and_then(|v| v.as_str()).map(|v| v.chars().take(260).collect::<String>()).filter(|v| !v.is_empty());
+            out.focus = Some((s("exe"), s("title")));
+        }
+    }
     if m.permissions.storage {
         out.store = o.get("store").cloned().filter(|v| !v.is_null());
+    }
+    if m.permissions.usage {
+        out.watch = o.get("watch").and_then(|w| w.as_array()).map(|a| a.iter().filter_map(|p| p.as_u64().map(|p| p as u32)).filter(|p| *p != 0).take(4).collect());
+    }
+    if m.permissions.downloads {
+        out.reveal = o.get("reveal").and_then(|r| r.as_str()).map(|r| r.chars().take(520).collect::<String>()).filter(|r| !r.is_empty());
     }
     out.wake_ms = o.get("wake_ms").and_then(|v| v.as_u64()).map(|n| n.clamp(50, MAX_WAKE_MS));
     if let Some(mc) = o.get("media").and_then(|v| v.as_object()) {
@@ -2217,8 +2694,21 @@ pub fn out_of(m: &Manifest, reply: &Value) -> Out {
     out
 }
 
+/// The meters of a `bars` or a `rings` block: a label, how much of it (0 to 1), a colour, and words at its side and under it.
+fn clean_meters(list: &[Value]) -> Vec<Value> {
+    let s = |x: Option<&Value>, n: usize| x.and_then(|v| v.as_str()).unwrap_or("").chars().take(n).collect::<String>();
+    list.iter()
+        .take(6)
+        .map(|x| {
+            let color = s(x.get("color"), 7);
+            let ok = color.len() == 7 && color.starts_with('#') && color[1..].chars().all(|c| c.is_ascii_hexdigit());
+            json!({ "label": s(x.get("label"), 12), "part": x.get("part").and_then(|p| p.as_f64()).unwrap_or(0.0).clamp(0.0, 1.0), "color": if ok { color } else { "#9a9aa2".to_string() }, "text": s(x.get("text"), 40), "sub": s(x.get("sub"), 60) })
+        })
+        .collect()
+}
+
 /// The blocks of a widget, its tip and a pane, kept to what the island draws: short texts, a few rows, ids a press can name.
-/// A block is one of `text`, `clock`, `bar`, `bars`, `head`, `grid`, `rows` and `buttons`; any other is left out.
+/// A block is one of `text`, `clock`, `bar`, `bars`, `rings`, `head`, `grid`, `rows` and `buttons`; any other is left out.
 pub fn clean_blocks(v: Option<&Value>) -> Vec<Value> {
     let s = |x: Option<&Value>, n: usize| x.and_then(|v| v.as_str()).unwrap_or("").chars().take(n).collect::<String>();
     let flag = |x: Option<&Value>| x.and_then(|v| v.as_bool()).unwrap_or(false);
@@ -2233,16 +2723,10 @@ pub fn clean_blocks(v: Option<&Value>) -> Vec<Value> {
         } else if b.contains_key("bar") {
             json!({ "bar": b.get("bar").and_then(|p| p.as_f64()).unwrap_or(0.0).clamp(0.0, 1.0), "text": s(b.get("text"), 40) })
         } else if let Some(list) = b.get("bars").and_then(|l| l.as_array()) {
-            let items: Vec<Value> = list
-                .iter()
-                .take(6)
-                .map(|x| {
-                    let color = s(x.get("color"), 7);
-                    let ok = color.len() == 7 && color.starts_with('#') && color[1..].chars().all(|c| c.is_ascii_hexdigit());
-                    json!({ "label": s(x.get("label"), 12), "part": x.get("part").and_then(|p| p.as_f64()).unwrap_or(0.0).clamp(0.0, 1.0), "color": if ok { color } else { "#9a9aa2".to_string() }, "text": s(x.get("text"), 40) })
-                })
-                .collect();
-            json!({ "bars": items })
+            json!({ "bars": clean_meters(list) })
+        } else if let Some(list) = b.get("rings").and_then(|l| l.as_array()) {
+            // (the same meters, drawn as circles)
+            json!({ "rings": clean_meters(list) })
         } else if b.contains_key("head") {
             json!({ "head": s(b.get("head"), 60), "prev": s(b.get("prev"), 40), "next": s(b.get("next"), 40), "press": s(b.get("press"), 40) })
         } else if let Some(g) = b.get("grid").and_then(|g| g.as_object()) {
@@ -2265,6 +2749,11 @@ pub fn clean_blocks(v: Option<&Value>) -> Vec<Value> {
                 .map(|a| a.iter().take(30).map(|r| json!({ "title": s(r.get("title"), 120), "sub": s(r.get("sub"), 120), "time": s(r.get("time"), 40), "past": flag(r.get("past")) })).collect())
                 .unwrap_or_default();
             json!({ "rows": rows, "empty": s(b.get("empty"), 200) })
+        } else if let Some(i) = b.get("item").and_then(|i| i.as_object()) {
+            let tile = s(i.get("tile"), MAX_IMAGE + 40);
+            json!({ "item": { "tile": if tile == "keep" || image_ok(&tile) { tile } else { String::new() }, "icon": s(i.get("icon"), 20), "text": s(i.get("text"), 120), "sub": s(i.get("sub"), 120) } })
+        } else if let Some(i) = b.get("icon_button").and_then(|i| i.as_object()) {
+            json!({ "icon_button": { "icon": s(i.get("icon"), 20), "press": s(i.get("press"), 40), "label": s(i.get("label"), 40) } })
         } else if b.contains_key("buttons") {
             let items: Vec<Value> = b.get("buttons").and_then(|r| r.as_array()).map(|a| a.iter().take(4).map(|x| json!({ "id": s(x.get("id"), 40), "label": s(x.get("label"), 30) })).collect()).unwrap_or_default();
             json!({ "buttons": items })
@@ -2416,11 +2905,8 @@ pub fn sync_audio(state: &IslandState) {
 }
 
 pub fn spawn(app: AppHandle, state: Arc<IslandState>) {
-    state.plugins.register(&app, &state, crate::builtin::all());
     state.plugins.rescan();
-    state.plugins.adopt_all(&crate::native::old_settings());
     sync_audio(&state);
-    state.plugins.start_natives();
     crate::pluginwasm::spawn(app.clone(), state.clone());
     std::thread::spawn(move || {
         // background work: never compete with the UI for CPU
@@ -2470,6 +2956,33 @@ pub fn plugin_moved_done(window: tauri::WebviewWindow, install: bool) {
     state.plugins.save();
 }
 
+/// What a card of a plugin that may see the browser asks for by name, from the island's own page: a guide's words (`guide`, by
+/// its `key`), a picture inside it (`picture`: `key`, `no`, `max`) and a page's main picture (`image`: `id`). They are too big to
+/// go through a module. The plugin has to be on and to have `permissions.browser`.
+#[tauri::command]
+pub async fn browser_get(window: tauri::WebviewWindow, plugin: String, what: String, args: Option<Value>) -> Result<Value, String> {
+    use tauri::Manager;
+    let state = window.state::<Arc<IslandState>>().inner().clone();
+    let p = state.plugins.plugin(&plugin).ok_or("no such plugin")?;
+    if !state.plugins.is_on(&p) || !p.manifest.permissions.browser {
+        return Err("that plugin may not see the browser".into());
+    }
+    let args = args.unwrap_or(Value::Null);
+    tauri::async_runtime::spawn_blocking(move || {
+        let ext = crate::browsersensor::state();
+        let text = |k: &str| args.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let num = |k: &str| args.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
+        Ok(match what.as_str() {
+            "guide" => serde_json::to_value(ext.guide(&text("key"))).unwrap_or(Value::Null),
+            "picture" => json!(ext.guide_picture(&text("key"), num("no") as u32, num("max") as u32)),
+            "image" => json!(ext.image(num("id"))),
+            _ => return Err(format!("no such thing: {what}")),
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// What the plugins' widgets and panes show now.
 #[tauri::command]
 pub fn plugin_surface(window: tauri::WebviewWindow) -> Value {
@@ -2485,11 +2998,34 @@ pub fn plugin_set(window: tauri::WebviewWindow, id: String, on: bool) {
     sync_audio(&state);
     // (a plugin that is switched off has no window open)
     if !on {
-        crate::modal::from_plugin(window.app_handle(), &id, "", Value::Null);
-        state.plugins.clear_surface(window.app_handle(), &id);
+        for who in state.plugins.family(&id) {
+            crate::modal::from_plugin(window.app_handle(), &who, "", Value::Null);
+            state.plugins.clear_surface(window.app_handle(), &who);
+        }
     }
     // (the head's widgets are the plugins' that are on: it lays itself out again)
     let _ = tauri::Emitter::emit(&window, "plugins-changed", ());
+}
+
+/// Take a plugin away: it is switched off, and its folder is deleted (what it kept, its settings and its place in the island, stay
+/// for when it is put back).
+#[tauri::command]
+pub fn plugin_remove(window: tauri::WebviewWindow, id: String) -> Result<(), String> {
+    use tauri::Manager;
+    if !valid_id(&id) {
+        return Err("That is not a plugin.".into());
+    }
+    let folder = dir().ok_or("There is no plugins folder.")?.join(&id);
+    if !folder.join("manifest.json").is_file() {
+        return Err("That plugin is not in the plugins folder.".into());
+    }
+    plugin_set(window.clone(), id, false);
+    std::fs::remove_dir_all(&folder).map_err(|e| e.to_string())?;
+    let state = window.state::<Arc<IslandState>>();
+    state.plugins.rescan();
+    sync_audio(&state);
+    let _ = tauri::Emitter::emit(&window, "plugins-changed", ());
+    Ok(())
 }
 
 #[tauri::command]
@@ -2588,6 +3124,110 @@ mod tests {
         // null takes the pane away; nothing said, nothing done
         assert_eq!(out_of(&m, &json!({ "pane": null })).pane, Some(None));
         assert!(out_of(&m, &json!({})).pane.is_none() && out_of(&m, &json!({})).widgets.is_none());
+    }
+
+    #[test]
+    fn a_graph_is_kept_to_numbers_in_range_and_watching_and_revealing_need_their_permissions() {
+        let mut m = Manifest { id: "g".into(), name: "G".into(), kind: "wasm".into(), ..Default::default() };
+        let reply = json!({
+            "card": { "title": "T", "body": [{ "kind": "graph", "values": [1.0, -5.0, 3.0], "max": 0.0, "marks": [1.0, 2.0, 3.0, 4.0, 5.0, -1.0] }] },
+            "watch": [4, 0, 5, 6, 7, 8],
+            "reveal": "C:/Users/me/Downloads/a.zip"
+        });
+        let out = out_of(&m, &reply);
+        let Block::Graph { values, max, marks } = &out.card.unwrap().unwrap().body[0] else { panic!("a graph") };
+        assert_eq!(values, &vec![1.0, 0.0, 3.0], "a number below zero is zero");
+        assert_eq!(*max, 3.0, "no top given: the highest number");
+        assert_eq!(marks.len(), 4);
+        // without the permissions, neither is done
+        assert!(out_of(&m, &reply).watch.is_none() && out_of(&m, &reply).reveal.is_none());
+        m.permissions.usage = true;
+        m.permissions.downloads = true;
+        let out = out_of(&m, &reply);
+        assert_eq!(out.watch, Some(vec![4, 5, 6, 7]), "at most four programs, never process 0");
+        assert!(out.reveal.unwrap().ends_with("a.zip"));
+        assert_eq!(out_of(&m, &json!({ "watch": [] })).watch, Some(vec![]));
+        assert!(out_of(&m, &json!({})).watch.is_none());
+    }
+
+    #[test]
+    fn a_module_says_which_of_its_resting_islands_are_on_and_what_a_widget_may_show() {
+        let m = Manifest {
+            id: "np".into(),
+            name: "NP".into(),
+            kind: "wasm".into(),
+            widgets: vec![WidgetSpec { id: "song".into(), ..Default::default() }],
+            rests: vec![RestSpec { id: "playing".into(), left: "song".into(), ..Default::default() }],
+            ..Default::default()
+        };
+        // only the islands its manifest lists; none said at all leaves what was
+        let out = out_of(&m, &json!({ "rest": ["playing", "made-up"] }));
+        assert_eq!(out.rest, Some(vec!["playing".to_string()]));
+        assert_eq!(out_of(&m, &json!({ "rest": [] })).rest, Some(vec![]));
+        assert!(out_of(&m, &json!({})).rest.is_none());
+        // a picture with words, and a button: kept to what the island draws; a picture must be a raster, or "keep"
+        let reply = json!({ "widgets": { "song": { "blocks": [
+            { "item": { "tile": "https://x/y.png", "icon": "music", "text": "Midnight Drive", "sub": "Artist" } },
+            { "icon_button": { "icon": "pause", "press": "playpause", "label": "Pause" } }
+        ] } } });
+        let w = out_of(&m, &reply).widgets.unwrap();
+        let blocks = w["song"]["blocks"].as_array().unwrap();
+        assert_eq!(blocks[0]["item"]["tile"], "");
+        assert_eq!(blocks[0]["item"]["text"], "Midnight Drive");
+        assert_eq!(blocks[1]["icon_button"]["press"], "playpause");
+        // "keep" shows the picture the widget showed last
+        let mut next = json!({ "blocks": [{ "item": { "tile": "keep", "icon": "", "text": "Next", "sub": "" } }] });
+        let was = json!({ "blocks": [{ "item": { "tile": "data:image/png;base64,AAAA", "icon": "", "text": "Last", "sub": "" } }] });
+        keep_tiles(&mut next, Some(&was));
+        assert_eq!(next["blocks"][0]["item"]["tile"], "data:image/png;base64,AAAA");
+    }
+
+    #[test]
+    fn a_plugin_may_have_a_tile_and_a_card_may_say_what_the_tile_says() {
+        let m: Manifest = serde_json::from_str(r##"{ "id": "games", "name": "Games", "kind": "wasm", "tile": { "name": "Games", "icon": "gamepad", "tint": "#3ea66f", "sizes": ["small", "wide"], "idle": "no game running" } }"##).unwrap();
+        let t = m.tile.unwrap();
+        assert_eq!((t.icon.as_str(), t.sizes.len(), t.idle.as_str()), ("gamepad", 2, "no game running"));
+        // (a plugin with no tile has none)
+        assert!(serde_json::from_str::<Manifest>(r#"{ "id": "x", "name": "X", "kind": "wasm" }"#).unwrap().tile.is_none());
+        // a card's glance is cut to what a tile can hold
+        let m = Manifest { id: "games".into(), name: "Games".into(), kind: "wasm".into(), ..Default::default() };
+        let c = clean_card(&m, &json!({ "title": "Elden Ring", "glance": { "big": "144144144144144", "caption": "fps" } })).unwrap();
+        assert_eq!(c.glance.unwrap().big.chars().count(), 12);
+    }
+
+    #[test]
+    fn meters_may_be_drawn_as_bars_or_as_rings_and_are_kept_to_a_few_plain_ones() {
+        let meters = json!([
+            { "label": "CPU", "part": 1.7, "color": "#5AC8E6", "text": "34%" },
+            { "label": "RAM", "part": 0.5, "color": "red; background:url(x)" },
+        ]);
+        let rings = clean_blocks(Some(&json!([{ "rings": meters }])));
+        assert_eq!(rings[0]["rings"][0]["part"], 1.0);
+        assert_eq!(rings[0]["rings"][0]["color"], "#5AC8E6");
+        // (a colour that is not #rrggbb is made plain)
+        assert_eq!(rings[0]["rings"][1]["color"], "#9a9aa2");
+        let bars = clean_blocks(Some(&json!([{ "bars": meters }])));
+        assert_eq!(bars[0]["bars"][0]["label"], "CPU");
+        assert!(bars[0].get("rings").is_none());
+    }
+
+    #[test]
+    fn requests_links_and_windows_need_their_permissions() {
+        let mut m = Manifest { id: "x".into(), name: "X".into(), kind: "wasm".into(), ..Default::default() };
+        let reply = json!({
+            "fetch": [{ "id": "u", "method": "GET", "url": "https://api.anthropic.com/a" }, { "id": "bad", "url": "https://evil.example.com/" }, { "id": "c", "url": "https://api.anthropic.com/c" }, { "id": "d", "url": "https://api.anthropic.com/d" }],
+            "open": "https://claude.ai/oauth/authorize?x=1",
+            "focus": { "exe": "C:/Program Files/Microsoft VS Code/Code.exe", "title": "nadi" }
+        });
+        let out = out_of(&m, &reply);
+        assert!(out.fetch.is_empty() && out.focus.is_none(), "no host named, no program permission");
+        m.permissions.net = vec!["api.anthropic.com".into()];
+        m.permissions.programs = true;
+        let out = out_of(&m, &reply);
+        assert_eq!(out.fetch.len(), 1, "the first two asked for are looked at, and only one is to a host it names");
+        assert_eq!(out.fetch[0]["id"], "u");
+        assert_eq!(out.focus, Some((Some("C:/Program Files/Microsoft VS Code/Code.exe".into()), Some("nadi".into()))));
+        assert_eq!(out.open.as_deref(), Some("https://claude.ai/oauth/authorize?x=1"), "(whether it may open it is the host's to say, by `permissions.open`)");
     }
 
     #[test]
@@ -2890,7 +3530,68 @@ mod tests {
         // without an address, a module still has no network
         let mut net_only = m.clone();
         net_only.source.http.clear();
-        assert!(check_manifest(&net_only).unwrap().contains("cannot ask the network"));
+        assert!(check_manifest(&net_only).unwrap().contains("cannot also see this PC"));
+    }
+
+    #[test]
+    fn a_bundle_is_one_plugin_made_of_parts_that_each_keep_their_own_permissions() {
+        let dir = std::env::temp_dir().join(format!("nadi-bundle-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.wasm"), b" asm").unwrap();
+        std::fs::write(dir.join("b.wasm"), b" asm").unwrap();
+        let m: Manifest = serde_json::from_value(json!({
+            "id": "claude", "name": "Claude", "kind": "bundle",
+            "settings": { "alerts": { "label": "A", "type": "toggle", "default": true } },
+            "actions": [{ "part": "usage", "id": "login", "label": "Sign in", "ask": "Code", "then": "finish" }],
+            "widgets": [{ "part": "usage", "id": "bars", "name": "Bars" }],
+            "parts": [
+                { "id": "sessions", "module": "a.wasm", "permissions": { "claude": true, "processes": true } },
+                { "id": "usage", "module": "b.wasm", "permissions": { "net": ["api.anthropic.com"], "storage": true } }
+            ]
+        }))
+        .unwrap();
+        assert!(check(&m, &dir).is_none());
+        let parts = parts_of(&m);
+        assert_eq!(parts.iter().map(|p| (p.id.as_str(), p.parent.as_str(), p.kind.as_str())).collect::<Vec<_>>(), [("claude-sessions", "claude", "wasm"), ("claude-usage", "claude", "wasm")]);
+        // the part that answers an action has it, and the widget goes to its part; the settings are the bundle's
+        assert!(parts[0].actions.is_empty() && parts[0].widgets.is_empty());
+        assert_eq!((parts[1].actions[0].id.as_str(), parts[1].widgets[0].id.as_str()), ("login", "bars"));
+        assert!(parts[0].settings.contains_key("alerts"));
+        // what is asked is what the parts ask, each once
+        let names: Vec<String> = permissions_of(&m).into_iter().map(|p| p.name).collect();
+        assert!(names.contains(&"claude sessions".to_string()) && names.contains(&"network".to_string()) && names.contains(&"storage".to_string()));
+        // a part that reaches a host and sees the PC is refused, as a module is
+        let mut bad = m.clone();
+        bad.parts[1].permissions.processes = true;
+        assert!(check(&bad, &dir).unwrap().contains("cannot also see this PC"));
+        let mut none = m.clone();
+        none.parts.clear();
+        assert!(check(&none, &dir).is_some());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_module_that_reaches_a_host_sees_nothing_of_this_pc() {
+        let dir = std::env::temp_dir().join(format!("nadi-net-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("u.wasm"), b" asm").unwrap();
+        let mut m = Manifest { id: "usage".into(), name: "Usage".into(), kind: "wasm".into(), module: "u.wasm".into(), ..Default::default() };
+        m.permissions.net = vec!["api.anthropic.com".into()];
+        m.permissions.storage = true;
+        m.permissions.open = vec!["https://claude.ai/".into()];
+        assert!(check(&m, &dir).is_none(), "a host, its own file and a link to open");
+        for (name, set) in [
+            ("claude", (|p: &mut Permissions| p.claude = true) as fn(&mut Permissions)),
+            ("processes", |p| p.processes = true),
+            ("programs", |p| p.programs = true),
+            ("run", |p| p.run = vec!["git status".into()]),
+            ("downloads", |p| p.downloads = true),
+        ] {
+            let mut bad = m.clone();
+            set(&mut bad.permissions);
+            assert!(check(&bad, &dir).unwrap_or_default().contains("cannot also see this PC"), "{name}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

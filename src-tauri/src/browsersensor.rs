@@ -1,112 +1,40 @@
-//! The browser extension's side of the bridge (the extension is the `nadi-chrome` repo).
+//! The browser extension's side of the bridge (the extension is the `nadi-chrome` repo), for the modules that may see it
+//! (`permissions.browser`).
 //!
-//! The extension keeps a WebSocket open to this app on 127.0.0.1 and tells it about the page in front: the
-//! headings, short paragraphs, buttons and links with where they sit, the page's own metadata (JSON-LD, Open
-//! Graph), its video, and how far down you are. That is exact, and it costs the browser next to nothing. It is
-//! the only way a page is read: without the extension, a browser is not read at all.
+//! The extension keeps a WebSocket open to this app on 127.0.0.1 and tells it about the pages open in the browser: the headings,
+//! short paragraphs, buttons and links with where they sit, the page's own metadata (JSON-LD, Open Graph), its video, and how far
+//! down you are. That is exact, and it costs the browser next to nothing. It is the only way a page is read: without the
+//! extension, a browser is not read at all.
 //!
-//! Nothing is accepted from a web page: the WebSocket handshake must carry the `Origin` of a browser
-//! extension (a web page cannot forge one), and the extension sends nothing until this app has said hello and
-//! sent its block list. Nothing here is stored.
+//! Nothing is accepted from a web page: the WebSocket handshake must carry the `Origin` of a browser extension (a web page cannot
+//! forge one), and the extension sends nothing until this app has said hello and sent its configuration. The configuration (which
+//! sites are never read, which buttons are safe to press) is the module's: it says it in `browser.config`. Nothing here is stored.
+//!
+//! A module is told what the pages are (`browser` event: the pages it watches, when they change, and the tab lists) and may ask for
+//! a button to be pressed or a tab to go to another page. What is too big to pass through a module (a guide's words, a picture) goes
+//! from here straight to the island's own page: see `browser_get`.
 
-use super::page::{Node, NodeKind, Page};
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::net::{TcpListener, TcpStream};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tungstenite::{handshake::server::{ErrorResponse, Request, Response}, Message};
 
 /// the extension tries these in order
 pub const PORTS: [u16; 5] = [47653, 47654, 47655, 47656, 47657];
 const PROTOCOL: u64 = 1;
+/// the most pages a module is told of in one event (a page can be a lot of text)
+const PAGES_PER_EVENT: usize = 2;
+/// the most nodes of a page a module is told of
+const MAX_NODES: usize = 400;
+/// how often a module is told of what changed
+const FEED_EVERY: Duration = Duration::from_secs(1);
 
 // ---------------------------------------------------------------- what the extension sends
-#[derive(Deserialize, Default, Clone, Debug)]
-#[serde(default)]
-pub struct ExtMeta {
-    pub lang: Option<String>,
-    pub site: Option<String>,
-    #[serde(rename = "ogType")]
-    pub og_type: Option<String>,
-    pub author: Option<String>,
-    pub published: Option<String>,
-    pub modified: Option<String>,
-    pub section: Option<String>,
-    pub generator: Option<String>,
-    pub description: Option<String>,
-    pub price: Option<String>,
-    pub currency: Option<String>,
-    pub canonical: Option<String>,
-    /// (label, value) rows of a wiki infobox
-    pub facts: Vec<(String, String)>,
-}
-
-#[derive(Deserialize, Default, Clone, Debug)]
-#[serde(default)]
-pub struct Rating {
-    pub value: Option<f64>,
-    pub count: Option<u64>,
-}
-
-#[derive(Deserialize, Default, Clone, Debug)]
-#[serde(default)]
-pub struct Offer {
-    pub price: Option<String>,
-    pub currency: Option<String>,
-    pub availability: Option<String>,
-}
-
-/// one JSON-LD item of the page, reduced to the fields that matter
-#[derive(Deserialize, Default, Clone, Debug)]
-#[serde(default)]
-pub struct LdItem {
-    #[serde(rename = "type")]
-    pub types: Vec<String>,
-    pub name: Option<String>,
-    pub author: Option<String>,
-    pub published: Option<String>,
-    pub modified: Option<String>,
-    pub section: Option<String>,
-    pub words: Option<u32>,
-    pub publisher: Option<String>,
-    /// minutes
-    pub total: Option<u32>,
-    pub prep: Option<u32>,
-    pub cook: Option<u32>,
-    #[serde(rename = "yield")]
-    pub yields: Option<String>,
-    pub ingredients: Option<u32>,
-    pub steps: Vec<String>,
-    pub rating: Option<Rating>,
-    pub offer: Option<Offer>,
-    pub brand: Option<String>,
-    /// minutes
-    pub length: Option<u32>,
-    pub uploaded: Option<String>,
-    pub answers: Option<u32>,
-    pub votes: Option<i64>,
-    pub accepted: Option<String>,
-    pub questions: Option<u32>,
-    pub crumbs: Vec<String>,
-}
-
-impl LdItem {
-    pub fn is(&self, t: &str) -> bool {
-        self.types.iter().any(|x| x == t)
-    }
-}
-
-#[derive(Deserialize, Default, Clone, Debug)]
-#[serde(default)]
-pub struct ExtVideo {
-    pub cur: f32,
-    pub dur: f32,
-    pub paused: bool,
-    pub ended: bool,
-    pub rate: f32,
-}
 
 /// A section of a guide (or an entry of its contents) the page names: where it is and what it is called.
 #[derive(Serialize, Deserialize, Default, Clone, Debug)]
@@ -125,7 +53,7 @@ pub struct GuideLink {
 pub struct Guide {
     /// changes when the guide's words do (worked out here): the island fetches the guide once per key
     pub key: String,
-    pub blocks: Vec<serde_json::Value>,
+    pub blocks: Vec<Value>,
     /// a plain-text FAQ: the original text, untouched
     pub raw: Option<String>,
     pub text: bool,
@@ -152,21 +80,23 @@ impl Guide {
         self.key = format!("{:x}", h.finish());
         Some(self)
     }
+
+    /// the headings of the third level and below, in order (what a closed card says is the section on screen)
+    fn heads(&self) -> Vec<String> {
+        self.blocks
+            .iter()
+            .filter_map(|b| {
+                let a = b.as_array()?;
+                (a[0].as_str()? == "h" && a.get(1)?.as_u64()? >= 3).then(|| a.get(2).and_then(|t| t.as_str()).map(|t| t.chars().take(200).collect::<String>()))?
+            })
+            .take(3)
+            .collect()
+    }
 }
 
-/// everything the extension said about a page besides the nodes
-#[derive(Clone, Default, Debug)]
-pub struct ExtData {
-    pub guide: Option<Guide>,
-    pub meta: ExtMeta,
-    pub ld: Vec<LdItem>,
-    pub video: Option<ExtVideo>,
-    pub words: u32,
-}
-
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Serialize, Default, Clone, Debug)]
 #[serde(default)]
-struct NodeMsg {
+pub struct NodeMsg {
     k: String,
     l: Option<u8>,
     t: String,
@@ -188,9 +118,9 @@ struct PageMsg {
     /// the height of the window
     vh: f32,
     words: u32,
-    meta: ExtMeta,
-    ld: Vec<LdItem>,
-    video: Option<ExtVideo>,
+    meta: Value,
+    ld: Value,
+    video: Value,
     nodes: Vec<NodeMsg>,
     guide: Option<Guide>,
     /// the page's main picture, shrunk by the extension: a `data:image/jpeg;base64,...` address
@@ -206,55 +136,33 @@ struct TabInfo {
     active: bool,
 }
 
-/// What the extension described, as the rest of the app reads a page.
+/// What the extension described for one tab.
 #[derive(Clone, Debug)]
 pub struct ExtSnapshot {
-    /// the browser tab, for asking its page script something
-    pub tab: i64,
     pub url: String,
     pub title: String,
-    /// the page as the classifier reads it (see `page`)
-    pub page: Page,
-    pub data: ExtData,
+    pub vh: f32,
+    pub words: u32,
+    pub meta: Value,
+    pub ld: Value,
+    pub video: Value,
+    pub nodes: Vec<NodeMsg>,
+    pub guide: Option<Guide>,
     /// the page's main picture, when the extension sent one
     pub image: Option<PageImage>,
     /// changes whenever anything about this page changes (a read, the video)
     pub version: u64,
 }
 
-/// A page's picture. The id changes only when the picture does, so the hub fetches the bytes once.
+/// A page's picture. The id changes only when the picture does, so the island fetches the bytes once.
 #[derive(Clone, Debug)]
 pub struct PageImage {
     pub id: u64,
     pub data: Arc<str>,
 }
 
-fn to_page(m: &PageMsg) -> Page {
-    let nodes = m
-        .nodes
-        .iter()
-        .filter_map(|n| {
-            let kind = match n.k.as_str() {
-                "h" => NodeKind::Heading(n.l.unwrap_or(2).clamp(1, 6)),
-                "p" => NodeKind::Text,
-                "li" => NodeKind::Item,
-                "b" => NodeKind::Button,
-                "a" => NodeKind::Link,
-                _ => return None,
-            };
-            Some(Node { kind, name: n.t.clone(), left: n.x, top: n.y, right: n.x + n.w, bottom: n.y + n.h, block: n.k == "p" })
-        })
-        .collect();
-    let vh = m.vh;
-    // positions are relative to the top of the window: the "view" is the window's height
-    Page {
-        url: Some(m.url.clone()),
-        nodes,
-        view: (0.0, vh),
-    }
-}
-
 // ---------------------------------------------------------------- state
+
 struct TabPage {
     win: i64,
     active: bool,
@@ -274,11 +182,11 @@ struct Inner {
     waiters: HashMap<u64, mpsc::Sender<bool>>,
     /// pictures asked for (see `guide_picture`): who is waiting for which
     picture_waiters: HashMap<u64, mpsc::Sender<Option<String>>>,
-    /// the pictures that came, by (the guide's key, the picture's number, its size): a card that is drawn again does
-    /// not ask again. Emptied when it grows too big.
+    /// the pictures that came, by (the guide's key, the picture's number, its size): a card that is drawn again does not ask
+    /// again. Emptied when it grows too big.
     pictures: HashMap<(String, u32, u32), String>,
-    /// tabs the island sent to another page of a guide: (the address and the title it had, when). The first page the
-    /// tab then reports at another address is the same card, moved on (see `take_moves`).
+    /// tabs the island sent to another page of a guide: (the address and the title it had, when). The first page the tab then
+    /// reports at another address is the same card, moved on (see `take_moves`).
     nav: HashMap<(u64, i64), (String, String, Instant)>,
     /// cards whose tab moved on: (browser, title before, title now)
     moves: Vec<(String, String, String)>,
@@ -290,23 +198,59 @@ struct Inner {
 #[derive(Default)]
 pub struct ExtState {
     inner: Mutex<Inner>,
-    /// what every extension is told to do (see `config_json`); sent as it connects, and when it changes
+    /// what every extension is told to do (see `set_config`); sent as it connects, and when it changes
     config: Mutex<String>,
+    serving: AtomicBool,
 }
 
-pub(crate) fn browser_of(exe: &str) -> String {
+/// the one link of this app (it is a socket on this PC)
+pub fn state() -> &'static Arc<ExtState> {
+    static S: OnceLock<Arc<ExtState>> = OnceLock::new();
+    S.get_or_init(|| Arc::new(ExtState::default()))
+}
+
+/// "C:\\...\\msedge.exe" or "Edge" or "msedge" -> "msedge"
+pub fn browser_of(exe: &str) -> String {
     let file = exe.rsplit(['\\', '/']).next().unwrap_or(exe).to_lowercase();
     file.strip_suffix(".exe").unwrap_or(&file).to_string()
 }
 
+/// "Rust docs - Google Chrome - Michael" -> "Rust docs": a title as the page names itself
+pub fn clean_title(title: &str) -> String {
+    let lower = title.to_lowercase();
+    let mut cut = title.len();
+    for marker in [" - google chrome", " - microsoft edge", " - microsoft\u{200b} edge", " - brave", " - vivaldi", " - opera", " \u{2014} mozilla firefox", " - mozilla firefox"] {
+        if let Some(i) = lower.find(marker) {
+            cut = cut.min(i);
+        }
+    }
+    let mut t = title[..cut].trim().to_string();
+    // Edge and Chrome put the profile's name before their own: "Zeppelin - Wikipedia - Personal"
+    if let Some(i) = t.rfind(" - ") {
+        let profile = t[i + 3..].trim().to_lowercase();
+        if matches!(profile.as_str(), "personal" | "work" | "school" | "default" | "guest") || profile.starts_with("profile ") {
+            t.truncate(i);
+        }
+    }
+    // Edge: "Page and 3 more pages - Profile" (the tab count and profile trail the title)
+    if let Some(i) = t.rfind(" and ") {
+        let mut words = t[i + 5..].split_whitespace();
+        let counted = words.next().map_or(false, |n| n.chars().all(|c| c.is_ascii_digit()));
+        if counted && words.next() == Some("more") {
+            t.truncate(i);
+        }
+    }
+    t
+}
+
 impl ExtState {
-    /// the browser (by exe) has an extension connected: the only source of its pages
-    pub fn covers(&self, exe: &str) -> bool {
-        let b = browser_of(exe);
+    /// the browser has an extension connected: the only source of its pages
+    pub fn covers(&self, browser: &str) -> bool {
+        let b = browser_of(browser);
         self.inner.lock().unwrap().conns.values().any(|c| c.browser == b)
     }
 
-    /// the browsers that are connected, for the settings
+    /// the browsers that are connected
     pub fn browsers(&self) -> Vec<String> {
         let mut v: Vec<String> = self.inner.lock().unwrap().conns.values().map(|c| c.browser.clone()).collect();
         v.sort();
@@ -314,25 +258,25 @@ impl ExtState {
         v
     }
 
-    /// The page the extension described for a tab of that browser, found by its title. The extension reads every
-    /// tab; when two have the same title the one in front wins, then the most recently described.
-    pub fn snapshot(&self, exe: &str, title: &str) -> Option<ExtSnapshot> {
-        let b = browser_of(exe);
+    /// The page the extension described for a tab of that browser, found by its title. The extension reads every tab; when two
+    /// have the same title the one in front wins, then the most recently described.
+    pub fn snapshot(&self, browser: &str, title: &str) -> Option<ExtSnapshot> {
+        let b = browser_of(browser);
         let want = title.trim().to_lowercase();
         let g = self.inner.lock().unwrap();
         g.pages
             .iter()
             .filter(|((c, _), _)| g.conns.get(c).map_or(false, |c| c.browser == b))
-            .filter(|(_, p)| super::clean_title(&p.snap.title).trim().to_lowercase() == want)
+            .filter(|(_, p)| clean_title(&p.snap.title).trim().to_lowercase() == want)
             .max_by_key(|(_, p)| (p.active, p.snap.version))
             .map(|(_, p)| p.snap.clone())
     }
 
-    /// Send the tab (found by its title) to another page of its guide, on the same site. The page is not read here:
-    /// it is read by the extension once it has loaded, like any other, and the card follows the tab (`take_moves`).
-    /// `true` when the browser took the order.
-    pub fn navigate(&self, exe: &str, title: &str, url: &str) -> bool {
-        let b = browser_of(exe);
+    /// Send the tab (found by its title) to another page of its guide, on the same site. The page is not read here: it is read by
+    /// the extension once it has loaded, like any other, and the card follows the tab (`take_moves`). `true` when the browser took
+    /// the order.
+    pub fn navigate(&self, browser: &str, title: &str, url: &str) -> bool {
+        let b = browser_of(browser);
         let want = title.trim().to_lowercase();
         let (tx, rx) = mpsc::channel();
         let id = {
@@ -341,12 +285,12 @@ impl ExtState {
                 .pages
                 .iter()
                 .filter(|((c, _), _)| g.conns.get(c).map_or(false, |c| c.browser == b))
-                .filter(|(_, p)| super::clean_title(&p.snap.title).trim().to_lowercase() == want)
+                .filter(|(_, p)| clean_title(&p.snap.title).trim().to_lowercase() == want)
                 .max_by_key(|(_, p)| (p.active, p.snap.version))
-                .map(|((c, tab), p)| (*c, *tab, p.snap.url.clone(), super::clean_title(&p.snap.title)));
+                .map(|((c, tab), p)| (*c, *tab, p.snap.url.clone(), clean_title(&p.snap.title)));
             let Some((conn_id, tab, old_url, old_title)) = found else { return false };
             let Some(conn) = g.conns.get(&conn_id) else { return false };
-            let sent = conn.tx.send(serde_json::json!({ "t": "go", "id": g.next + 1, "tab": tab, "url": url }).to_string()).is_ok();
+            let sent = conn.tx.send(json!({ "t": "go", "id": g.next + 1, "tab": tab, "url": url }).to_string()).is_ok();
             if !sent {
                 return false;
             }
@@ -370,16 +314,16 @@ impl ExtState {
         std::mem::take(&mut self.inner.lock().unwrap().moves)
     }
 
-    /// The titles (as the window names them) of the pages the extension has described for that browser: every tab
-    /// it could read, not only the ones that were visited. The tabs in front come first.
-    pub fn open_pages(&self, exe: &str) -> Vec<String> {
-        let b = browser_of(exe);
+    /// The titles (as the window names them) of the pages the extension has described for that browser: every tab it could read,
+    /// not only the ones that were visited. The tabs in front come first.
+    pub fn open_pages(&self, browser: &str) -> Vec<String> {
+        let b = browser_of(browser);
         let g = self.inner.lock().unwrap();
         let mut found: Vec<(bool, u64, String)> = g
             .pages
             .iter()
             .filter(|((c, _), _)| g.conns.get(c).map_or(false, |c| c.browser == b))
-            .map(|(_, p)| (p.active, p.snap.version, super::clean_title(&p.snap.title)))
+            .map(|(_, p)| (p.active, p.snap.version, clean_title(&p.snap.title)))
             .filter(|(_, _, t)| !t.trim().is_empty())
             .collect();
         found.sort_by(|a, b| (b.0, b.1).cmp(&(a.0, a.1)));
@@ -387,28 +331,28 @@ impl ExtState {
     }
 
     /// The titles of the tabs the extension lists for that browser, lower case: what is open (not blocked ones).
-    pub fn tab_titles(&self, exe: &str) -> Option<Vec<String>> {
-        let b = browser_of(exe);
+    pub fn tab_titles(&self, browser: &str) -> Option<Vec<String>> {
+        let b = browser_of(browser);
         let g = self.inner.lock().unwrap();
         let mut found = false;
         let mut out = Vec::new();
         for (id, _) in g.conns.iter().filter(|(_, c)| c.browser == b) {
             found = true;
             if let Some(list) = g.lists.get(id) {
-                out.extend(list.iter().map(|t| super::clean_title(&t.title).to_lowercase()));
+                out.extend(list.iter().map(|t| clean_title(&t.title).to_lowercase()));
             }
         }
         found.then_some(out)
     }
 
-    /// Press a button of the page in front, by its text (only a safe one, see `pagetext::SAFE_BUTTONS`).
-    pub fn press(&self, exe: &str, label: &str) -> bool {
-        let b = browser_of(exe);
+    /// Press a button of the page in front, by its text (the module decides which are safe).
+    pub fn press(&self, browser: &str, label: &str) -> bool {
+        let b = browser_of(browser);
         let (tx, rx) = mpsc::channel();
         let id = {
             let mut g = self.inner.lock().unwrap();
             let Some(conn) = g.conns.values().find(|c| c.browser == b) else { return false };
-            let sent = conn.tx.send(serde_json::json!({ "t": "press", "id": g.next + 1, "label": label }).to_string()).is_ok();
+            let sent = conn.tx.send(json!({ "t": "press", "id": g.next + 1, "label": label }).to_string()).is_ok();
             if !sent {
                 return false;
             }
@@ -425,12 +369,12 @@ impl ExtState {
     /// the guide of a card, by the key the card was given (see `Guide::seal`): always the page's own
     pub fn guide(&self, key: &str) -> Option<Guide> {
         let g = self.inner.lock().unwrap();
-        g.pages.values().find_map(|p| p.snap.data.guide.as_ref().filter(|x| x.key == key).cloned())
+        g.pages.values().find_map(|p| p.snap.guide.as_ref().filter(|x| x.key == key).cloned())
     }
 
-    /// A picture inside a guide (a table's icon, a figure), by the number its marker has: the extension finds it in the
-    /// tab (from the browser's own copy when it can, else without cookies), shrinks it to `max` px and sends it as a
-    /// `data:` address. The app never contacts the site. Blocks until it comes (the extension does them one at a time).
+    /// A picture inside a guide (a table's icon, a figure), by the number its marker has: the extension finds it in the tab (from
+    /// the browser's own copy when it can, else without cookies), shrinks it to `max` px and sends it as a `data:` address. The
+    /// app never contacts the site. Blocks until it comes (the extension does them one at a time).
     pub fn guide_picture(&self, key: &str, no: u32, max: u32) -> Option<String> {
         let max = max.clamp(32, 480);
         let (tx, rx) = mpsc::channel();
@@ -439,10 +383,10 @@ impl ExtState {
             if let Some(d) = g.pictures.get(&(key.to_string(), no, max)) {
                 return Some(d.clone());
             }
-            let found = g.pages.iter().find(|(_, p)| p.snap.data.guide.as_ref().map_or(false, |x| x.key == key)).map(|((c, tab), _)| (*c, *tab));
+            let found = g.pages.iter().find(|(_, p)| p.snap.guide.as_ref().map_or(false, |x| x.key == key)).map(|((c, tab), _)| (*c, *tab));
             let (conn_id, tab) = found?;
             let conn = g.conns.get(&conn_id)?;
-            let sent = conn.tx.send(serde_json::json!({ "t": "img", "id": g.next + 1, "tab": tab, "n": no, "max": max }).to_string()).is_ok();
+            let sent = conn.tx.send(json!({ "t": "img", "id": g.next + 1, "tab": tab, "n": no, "max": max }).to_string()).is_ok();
             if !sent {
                 return None;
             }
@@ -477,30 +421,113 @@ impl ExtState {
         }
     }
 
-    pub fn config(&self) -> String {
+    fn config(&self) -> String {
         let c = self.config.lock().unwrap().clone();
         if c.is_empty() {
-            config_json(false, false)
+            disabled()
         } else {
             c
         }
     }
+
+    fn version(&self) -> u64 {
+        self.inner.lock().unwrap().version
+    }
+
+    /// The link is served from now on (once started, it stays: it is a socket on this PC).
+    pub fn serve(self: &Arc<Self>) {
+        if !self.serving.swap(true, Ordering::Relaxed) {
+            spawn(self.clone());
+        }
+    }
 }
 
-pub fn config_json(enabled: bool, images: bool) -> String {
-    serde_json::json!({
+/// what an extension is told when no plugin wants it to read: nothing
+pub fn disabled() -> String {
+    json!({ "t": "config", "enabled": false }).to_string()
+}
+
+/// What the module says the extensions are to do (`browser.config`): which sites are never read (`hosts`, `hostWords`,
+/// `titleWords`), which buttons may be pressed (`safe`) and whether pictures are sent (`images`). It is read as far as the extension
+/// reads it; `enabled` is the host's to say.
+pub fn config_json(module: &Value) -> String {
+    let list = |k: &str| -> Vec<String> { module.get(k).and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|x| x.as_str()).take(400).map(|s| s.chars().take(120).collect()).collect()).unwrap_or_default() };
+    json!({
         "t": "config",
-        "enabled": enabled,
-        "hosts": super::pagekind::BLOCK_HOSTS,
-        "hostWords": super::pagekind::BLOCK_HOST_WORDS,
-        "titleWords": super::pagekind::BLOCK_TITLE_WORDS,
-        "safe": super::pagetext::SAFE_BUTTONS,
-        "images": images,
+        "enabled": true,
+        "hosts": list("hosts"),
+        "hostWords": list("hostWords"),
+        "titleWords": list("titleWords"),
+        "safe": list("safe"),
+        "images": module.get("images").and_then(|v| v.as_bool()).unwrap_or(false),
     })
     .to_string()
 }
 
+// ---------------------------------------------------------------- what a module is told
+
+/// What one module has been told of the pages, and which it watches: a page is told when it changes, the lists when anything does.
+#[derive(Default)]
+pub struct Feed {
+    /// the pages it asks to be told of: (browser, title as the window names it)
+    pub watch: Vec<(String, String)>,
+    sent: HashMap<(String, String), u64>,
+    seen_version: u64,
+    last: Option<Instant>,
+    was_empty: bool,
+}
+
+impl Feed {
+    /// The `browser` event, when there is something to say (at most once a second): the browsers with an extension, the tabs
+    /// each lists and has open, the cards that moved to another page of their guide, and the watched pages that changed.
+    pub fn poll(&mut self, ext: &ExtState) -> Option<Value> {
+        if self.last.map_or(false, |t| t.elapsed() < FEED_EVERY) {
+            return None;
+        }
+        let version = ext.version();
+        let browsers = ext.browsers();
+        let moves = ext.take_moves();
+        let mut pages: Vec<Value> = Vec::new();
+        for (browser, title) in self.watch.iter() {
+            if pages.len() >= PAGES_PER_EVENT {
+                break;
+            }
+            let Some(s) = ext.snapshot(browser, title) else { continue };
+            let key = (browser.clone(), title.clone());
+            if self.sent.get(&key) == Some(&s.version) {
+                continue;
+            }
+            self.sent.insert(key, s.version);
+            let guide = s.guide.as_ref().map(|g| json!({ "key": g.key, "text": g.text, "heads": g.heads() }));
+            pages.push(json!({
+                "browser": browser, "title": title, "url": s.url, "version": s.version, "vh": s.vh, "words": s.words,
+                "meta": s.meta, "ld": s.ld, "video": s.video, "guide": guide, "image": s.image.as_ref().map(|i| i.id),
+                "nodes": s.nodes.iter().take(MAX_NODES).collect::<Vec<_>>(),
+            }));
+        }
+        self.sent.retain(|(b, t), _| self.watch.iter().any(|(wb, wt)| wb == b && wt == t));
+        let changed = version != self.seen_version || !moves.is_empty() || !pages.is_empty();
+        let empty = browsers.is_empty();
+        if !changed && self.last.map_or(false, |t| t.elapsed() < Duration::from_secs(5)) && self.was_empty == empty {
+            return None;
+        }
+        self.last = Some(Instant::now());
+        self.seen_version = version;
+        self.was_empty = empty;
+        let mut tabs = serde_json::Map::new();
+        let mut open = serde_json::Map::new();
+        for b in &browsers {
+            if let Some(list) = ext.tab_titles(b) {
+                tabs.insert(b.clone(), json!(list));
+            }
+            open.insert(b.clone(), json!(ext.open_pages(b)));
+        }
+        Some(json!({ "browsers": browsers, "tabs": tabs, "open": open, "moves": moves, "pages": pages }))
+    }
+}
+
 // ---------------------------------------------------------------- the server
+
 pub fn spawn(ext: Arc<ExtState>) {
     std::thread::spawn(move || {
         let Some(listener) = PORTS.iter().find_map(|p| TcpListener::bind(("127.0.0.1", *p)).ok()) else {
@@ -578,12 +605,12 @@ fn id_cleanup(ext: &Arc<ExtState>, id: u64) {
 
 /// one message from the extension; `false` ends the connection
 fn handle(ext_state: &Arc<ExtState>, id: &mut u64, tx: &mpsc::Sender<String>, text: &str) -> bool {
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else { return true };
+    let Ok(v) = serde_json::from_str::<Value>(text) else { return true };
     let t = v.get("t").and_then(|t| t.as_str()).unwrap_or("");
     let ext = ext_state;
     if t == "hello" {
         if v.get("v").and_then(|x| x.as_u64()) != Some(PROTOCOL) {
-            let _ = tx.send(serde_json::json!({ "t": "error", "why": "protocol" }).to_string());
+            let _ = tx.send(json!({ "t": "error", "why": "protocol" }).to_string());
             return false;
         }
         let browser = v.get("browser").and_then(|b| b.as_str()).unwrap_or("chrome").to_lowercase();
@@ -591,6 +618,7 @@ fn handle(ext_state: &Arc<ExtState>, id: &mut u64, tx: &mpsc::Sender<String>, te
         g.next += 1;
         *id = g.next;
         g.conns.insert(*id, Conn { browser, tx: tx.clone() });
+        g.version += 1;
         drop(g);
         let _ = tx.send(ext.config());
         return true;
@@ -600,7 +628,7 @@ fn handle(ext_state: &Arc<ExtState>, id: &mut u64, tx: &mpsc::Sender<String>, te
     }
     match t {
         "ping" => {
-            let _ = tx.send(serde_json::json!({ "t": "pong" }).to_string());
+            let _ = tx.send(json!({ "t": "pong" }).to_string());
         }
         "page" => {
             let Ok(mut m) = serde_json::from_value::<PageMsg>(v) else { return true };
@@ -624,11 +652,15 @@ fn handle(ext_state: &Arc<ExtState>, id: &mut u64, tx: &mpsc::Sender<String>, te
                 None => None,
             };
             let snap = ExtSnapshot {
-                tab: m.tab,
                 url: m.url.clone(),
                 title: m.title.clone(),
-                page: to_page(&m),
-                data: ExtData { meta: m.meta, ld: m.ld, video: m.video, words: m.words, guide: m.guide.take().and_then(Guide::seal) },
+                vh: m.vh,
+                words: m.words,
+                meta: m.meta,
+                ld: m.ld,
+                video: m.video,
+                nodes: std::mem::take(&mut m.nodes),
+                guide: m.guide.take().and_then(Guide::seal),
                 image,
                 version,
             };
@@ -645,7 +677,7 @@ fn handle(ext_state: &Arc<ExtState>, id: &mut u64, tx: &mpsc::Sender<String>, te
             if let Some((old_url, old_title, _)) = g.nav.get(&(*id, m.tab)).cloned() {
                 if old_url != m.url {
                     g.nav.remove(&(*id, m.tab));
-                    let now = super::clean_title(&m.title);
+                    let now = clean_title(&m.title);
                     if let Some(b) = g.conns.get(id).map(|c| c.browser.clone()) {
                         if now != old_title {
                             g.moves.push((b, old_title, now));
@@ -671,12 +703,12 @@ fn handle(ext_state: &Arc<ExtState>, id: &mut u64, tx: &mpsc::Sender<String>, te
         }
         "video" => {
             let tab = v.get("tab").and_then(|x| x.as_i64()).unwrap_or(-1);
-            let video: Option<ExtVideo> = v.get("video").and_then(|x| serde_json::from_value(x.clone()).ok());
+            let video = v.get("video").cloned().unwrap_or(Value::Null);
             let mut g = ext.inner.lock().unwrap();
             g.version += 1;
             let version = g.version;
             if let Some(p) = g.pages.get_mut(&(*id, tab)) {
-                p.snap.data.video = video;
+                p.snap.video = video;
                 p.snap.version = version;
             }
         }
@@ -700,6 +732,7 @@ fn handle(ext_state: &Arc<ExtState>, id: &mut u64, tx: &mpsc::Sender<String>, te
         "tabs" => {
             let list: Vec<TabInfo> = v.get("list").and_then(|l| serde_json::from_value(l.clone()).ok()).unwrap_or_default();
             let mut g = ext.inner.lock().unwrap();
+            g.version += 1;
             // a page of a tab that is no longer listed (closed, or now blocked) is forgotten
             let open: Vec<i64> = list.iter().map(|t| t.tab).collect();
             g.pages.retain(|(c, tab), _| *c != *id || open.contains(tab));
@@ -737,19 +770,17 @@ fn handle(ext_state: &Arc<ExtState>, id: &mut u64, tx: &mpsc::Sender<String>, te
 mod tests {
     use super::*;
 
+    fn page_msg(json: &str) -> PageMsg {
+        serde_json::from_str(json).unwrap()
+    }
+
     #[test]
-    fn page_messages_become_the_shape_the_classifier_reads() {
-        let m: PageMsg = serde_json::from_str(
-            r#"{"url":"https://x.dev/a","title":"T","tab":3,"win":1,"active":true,
-                "vh":800,
-                "nodes":[{"k":"h","l":2,"t":"Step 1: Go","x":10,"y":100,"w":300,"h":30},{"k":"p","t":"Some words here.","x":10,"y":140,"w":300,"h":60},{"k":"b","t":"Copy","x":10,"y":210,"w":40,"h":20},{"k":"zz","t":"?","x":0,"y":0,"w":1,"h":1}]}"#,
-        )
-        .unwrap();
-        let p = to_page(&m);
-        assert_eq!(p.nodes.len(), 3);
-        assert_eq!(p.nodes[0].kind, NodeKind::Heading(2));
-        assert!(p.nodes[1].block && !p.nodes[0].block);
-        assert_eq!(p.view, (0.0, 800.0));
+    fn a_page_message_keeps_its_nodes_and_the_views_height() {
+        let m = page_msg(
+            r#"{"url":"https://x.dev/a","title":"T","tab":3,"win":1,"active":true,"vh":800,
+                "nodes":[{"k":"h","l":2,"t":"Step 1: Go","x":10,"y":100,"w":300,"h":30},{"k":"p","t":"Some words here.","x":10,"y":140,"w":300,"h":60}]}"#,
+        );
+        assert_eq!((m.nodes.len(), m.vh, m.nodes[0].l), (2, 800.0, Some(2)));
     }
 
     #[test]
@@ -760,19 +791,21 @@ mod tests {
         let c = serde_json::from_str::<Guide>(&blocks("two")).unwrap().seal().unwrap();
         assert_eq!(a.key, b.key);
         assert_ne!(a.key, c.key);
-        assert_eq!(a.next.unwrap().t, "8/9");
+        assert_eq!(a.next.clone().unwrap().t, "8/9");
+        assert_eq!(a.heads(), vec!["8/8".to_string()]);
         // too little to be a guide, or not blocks at all
         assert!(serde_json::from_str::<Guide>(r#"{"blocks":[["p","x"]]}"#).unwrap().seal().is_none());
         assert!(serde_json::from_str::<Guide>(r#"{"blocks":[1,2,3,4]}"#).unwrap().seal().is_none());
     }
 
     #[test]
-    fn json_ld_items_are_read() {
-        let it: LdItem = serde_json::from_str(r#"{"type":["Recipe"],"name":"Soup","total":45,"yield":"4 servings","ingredients":5,"steps":["a","b"],"rating":{"value":4.7,"count":10}}"#).unwrap();
-        assert!(it.is("Recipe"));
-        assert_eq!((it.total, it.ingredients), (Some(45), Some(5)));
-        assert_eq!(it.yields.as_deref(), Some("4 servings"));
-        assert_eq!(it.rating.unwrap().count, Some(10));
+    fn titles_lose_the_browser_suffix_and_the_profile_name() {
+        assert_eq!(clean_title("Rust docs - Google Chrome"), "Rust docs");
+        assert_eq!(clean_title("Inbox and 3 more pages - Personal - Microsoft\u{200b} Edge"), "Inbox");
+        assert_eq!(clean_title("Zeppelin - Wikipedia - Personal - Microsoft\u{200b} Edge"), "Zeppelin - Wikipedia");
+        assert_eq!(clean_title("Plain"), "Plain");
+        assert_eq!(browser_of(r"C:\Program Files\Microsoft\Edge\Application\msedge.exe"), "msedge");
+        assert_eq!(browser_of("Chrome.EXE"), "chrome");
     }
 
     #[test]
@@ -783,5 +816,40 @@ mod tests {
         assert!(origin_ok(&ok));
         assert!(!origin_ok(&web));
         assert!(!origin_ok(&none));
+    }
+
+    #[test]
+    fn the_module_says_what_the_extension_is_told() {
+        let c: Value = serde_json::from_str(&config_json(&json!({ "hosts": ["bank.example"], "safe": ["share"], "images": true, "enabled": false, "x": 1 }))).unwrap();
+        assert_eq!((c["t"].as_str(), c["enabled"].as_bool(), c["images"].as_bool()), (Some("config"), Some(true), Some(true)));
+        assert_eq!((c["hosts"][0].as_str(), c["safe"][0].as_str()), (Some("bank.example"), Some("share")));
+        let d: Value = serde_json::from_str(&disabled()).unwrap();
+        assert_eq!(d["enabled"], false);
+    }
+
+    #[test]
+    fn a_page_is_told_once_and_again_when_it_changes() {
+        let ext = ExtState::default();
+        {
+            let mut g = ext.inner.lock().unwrap();
+            g.conns.insert(1, Conn { browser: "msedge".into(), tx: mpsc::channel().0 });
+            g.version = 5;
+            let snap = ExtSnapshot { url: "https://x.dev/a".into(), title: "Day 1 - Microsoft\u{200b} Edge".into(), vh: 800.0, words: 10, meta: Value::Null, ld: Value::Null, video: Value::Null, nodes: vec![NodeMsg { k: "h".into(), l: Some(2), t: "Step 1".into(), ..Default::default() }], guide: None, image: None, version: 5 };
+            g.pages.insert((1, 7), TabPage { win: 1, active: true, snap });
+        }
+        let mut feed = Feed { watch: vec![("msedge".into(), "Day 1".into())], ..Default::default() };
+        let first = feed.poll(&ext).unwrap();
+        assert_eq!(first["browsers"], json!(["msedge"]));
+        assert_eq!(first["pages"][0]["url"], "https://x.dev/a");
+        assert_eq!(first["pages"][0]["nodes"][0]["t"], "Step 1");
+        // nothing changed: nothing is said (and not more than once a second anyway)
+        feed.last = Some(Instant::now() - Duration::from_secs(2));
+        assert!(feed.poll(&ext).is_none());
+        // it changed: told again
+        ext.inner.lock().unwrap().pages.get_mut(&(1, 7)).unwrap().snap.version = 9;
+        ext.inner.lock().unwrap().version = 9;
+        feed.last = Some(Instant::now() - Duration::from_secs(2));
+        let again = feed.poll(&ext).unwrap();
+        assert_eq!(again["pages"][0]["version"], 9);
     }
 }

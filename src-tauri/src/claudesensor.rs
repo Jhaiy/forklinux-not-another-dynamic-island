@@ -1,72 +1,27 @@
-//! Claude Code: the sessions running on this machine, as cards (and, in `usage`, how much of the Claude limits is used).
+//! The Claude Code sensor: the sessions running on this machine, for the modules that may see them (`permissions.claude`).
 //!
-//! Claude Code keeps a small registry file per running session in `~/.claude/sessions/<pid>.json`
-//! (process id, session id, folder, where it runs, busy/idle/waiting) and the conversation itself in
-//! `~/.claude/projects/<folder>/<session id>.jsonl`. Both are read here, only while the hub shows
-//! the cards (the caller is `get_activity`, about once a second): the registry is a handful of tiny
-//! files, and a transcript is only parsed again when it changed.
-
-mod usage;
+//! Claude Code keeps a small registry file per running session in `~/.claude/sessions/<pid>.json` (process id, session id,
+//! folder, where it runs, busy/idle/waiting) and the conversation itself in `~/.claude/projects/<folder>/<session id>.jsonl`.
+//! Both are read here (the registry is a handful of tiny files, and a transcript is only parsed again when it changed), and the
+//! module is told what each session is doing: its title, the prompt it answers, the latest tool calls, how full its context is,
+//! what it cost, and which window it runs in. What the module makes of that (cards, a pill when one needs you) is its own.
 
 use serde::Serialize;
-use serde_json::Value;
-use std::collections::{HashMap, HashSet};
-use std::time::Duration;
-use crate::native::{manifest_of, old_flag, Adopted, Ctx, Gate, Native};
-use crate::plugins::Manifest;
+use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 
-/// a session that went idle this recently, after doing work, counts as finished (its result waits for you)
-const FINISHED_S: u64 = 15 * 60;
 /// how much of the end of a transcript is read: enough for the latest turns, not the whole history
 const TAIL_BYTES: u64 = 400_000;
-
-/// what the plugin is, as the island's list shows it
-pub fn manifest() -> Manifest {
-    manifest_of(include_str!("claude_code.json"))
-}
-
-/// what the plugin takes over from the settings the app had before it was a plugin
-pub fn adopted(old: &Value, default_on: bool) -> Adopted {
-    let mut values = serde_json::Map::new();
-    values.insert("alerts".into(), Value::Bool(old_flag(old, "llm_brief", true)));
-    Adopted { on: old_flag(old, "llm_detection", default_on), values }
-}
 
 #[derive(Serialize, Clone)]
 pub struct FeedItem {
     icon: &'static str,
     text: String,
-}
-
-#[derive(Serialize, Clone)]
-pub struct LlmCard {
-    id: String,
-    pid: u32,
-    provider: &'static str,
-    /// the session's title (what the conversation is about), else its folder
-    title: String,
-    project: String,
-    /// where it runs: "VS Code", "Terminal", ...
-    host: String,
-    host_icon: &'static str,
-    host_exe: Option<String>,
-    /// waiting | finished | working | idle
-    state: &'static str,
-    activity: FeedItem,
-    context_tokens: u64,
-    context_limit: u64,
-    model: String,
-    running_secs: u64,
-    prompt: String,
-    feed: Vec<FeedItem>,
-    cost_usd: f64,
-    lines_added: u64,
-    lines_removed: u64,
 }
 
 #[derive(Clone, Default)]
@@ -294,25 +249,6 @@ fn human_prompt(v: &Value) -> Option<String> {
     (!t.is_empty() && !t.starts_with('<')).then(|| t.to_string())
 }
 
-/// a finished session the person has looked at (its card was clicked): session id -> the
-/// `statusUpdatedAt` it was dismissed at. It comes back only if the session finishes again.
-fn dismissed() -> &'static Mutex<HashMap<String, u64>> {
-    static D: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
-    D.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-/// the person looked at a finished session: its card goes away until it finishes something new
-fn dismiss(id: String) {
-    for Reg { reg, .. } in registries(false) {
-        if reg.get("sessionId").and_then(Value::as_str) == Some(id.as_str()) {
-            let started = reg.get("startedAt").and_then(Value::as_u64).unwrap_or(0);
-            let updated = reg.get("statusUpdatedAt").and_then(Value::as_u64).unwrap_or(started);
-            dismissed().lock().unwrap().insert(id, updated);
-            return;
-        }
-    }
-}
-
 fn read_tail(path: &Path) -> Option<String> {
     let mut f = std::fs::File::open(path).ok()?;
     let len = f.metadata().ok()?.len();
@@ -473,282 +409,46 @@ fn host_of(root: &Root, pid: u32, entrypoint: &str) -> Host {
     host
 }
 
-fn context_limit(model: &str) -> u64 {
-    let m = model.to_lowercase();
-    if m.contains("haiku") {
-        200_000
-    } else {
-        1_000_000
-    }
-}
-
-/// "claude-sonnet-5-5" -> "Sonnet 5.5"; "claude-haiku-4-5-20251001" -> "Haiku 4.5"
-fn model_name(model: &str) -> String {
-    let rest = model.trim_start_matches("claude-");
-    let mut parts = rest.split('-');
-    let Some(family) = parts.next().filter(|f| !f.is_empty()) else { return String::new() };
-    let mut name: String = family.chars().take(1).flat_map(char::to_uppercase).chain(family.chars().skip(1)).collect();
-    let version: Vec<&str> = parts.filter(|p| p.len() <= 2 && p.chars().all(|c| c.is_ascii_digit())).collect();
-    if !version.is_empty() {
-        name.push(' ');
-        name.push_str(&version.join("."));
-    }
-    name
-}
-
 fn now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
-/// every running Claude Code session: the ones waiting for you first, then working, then idle
-pub fn cards() -> Vec<LlmCard> {
-    let mut out: Vec<(u64, LlmCard)> = Vec::new();
+
+/// Every running interactive session, as the module is told of it. A session can have more than one process, so the same
+/// `id` may come twice: the module keeps the one that changed last.
+pub fn sessions() -> Value {
+    let mut out: Vec<Value> = Vec::new();
     for Reg { root, reg } in registries(true) {
-        let claude = root.dir.clone();
         let (Some(pid), Some(id)) = (reg.get("pid").and_then(Value::as_u64), reg.get("sessionId").and_then(Value::as_str)) else { continue };
-        let pid = pid as u32;
         let str_of = |k: &str| reg.get(k).and_then(Value::as_str).unwrap_or("");
         if !matches!(str_of("kind"), "interactive" | "") {
             continue;
         }
-        let t = transcript_path(id, &claude, &reg).map(|p| parsed(&p)).unwrap_or_default();
-        let status = str_of("status");
-        let waiting_for = reg.get("waitingFor").and_then(Value::as_str).filter(|s| !s.is_empty());
+        let t = transcript_path(id, &root.dir, &reg).map(|p| parsed(&p)).unwrap_or_default();
         let started = reg.get("startedAt").and_then(Value::as_u64).unwrap_or(0);
-        let updated = reg.get("statusUpdatedAt").and_then(Value::as_u64).unwrap_or(started);
-        let state = if waiting_for.is_some() || status.contains("wait") {
-            "waiting"
-        } else if status == "busy" {
-            "working"
-        } else if t.model.is_some()
-            && now_ms().saturating_sub(updated) / 1000 <= FINISHED_S
-            && dismissed().lock().unwrap().get(id) != Some(&updated)
-        {
-            // idle again after a turn, a short while ago: done, and the result is yours to look at
-            "finished"
-        } else {
-            "idle"
-        };
-        let activity = match state {
-            "waiting" => FeedItem {
-                icon: "phone",
-                text: match waiting_for.map(str::to_lowercase) {
-                    Some(w) if w.contains("perm") || w.contains("approv") => "Waiting for your approval".into(),
-                    Some(w) if w.contains("input") || w.contains("answer") || w.contains("question") => "Waiting for your answer".into(),
-                    _ => "Waiting for you".into(),
-                },
-            },
-            "working" => t.last.clone().unwrap_or(FeedItem { icon: "sparkle", text: "Thinking".into() }),
-            "finished" => FeedItem { icon: "check", text: "Finished".into() },
-            _ => FeedItem { icon: "moon", text: "Idle".into() },
-        };
-        // idle sessions are not shown
-        if state == "idle" {
-            continue;
-        }
-        let cwd = str_of("cwd");
-        let project = basename(cwd);
-        let host = host_of(&root, pid, str_of("entrypoint"));
-        let model = t.model.clone().unwrap_or_default();
-        // needs you > finished > the others (working, then idle); the most recent first within each
-        let rank = match state {
-            "waiting" => 0,
-            "finished" => 1,
-            "working" => 2,
-            _ => 3,
-        };
-        out.push((
-            rank * 1_000_000_000_000_000 + (u64::MAX / 4).saturating_sub(updated).min(999_999_999_999_999),
-            LlmCard {
-                id: id.to_string(),
-                pid,
-                provider: "claude",
-                title: t.title.clone().filter(|s| !s.is_empty()).or_else(|| reg.get("name").and_then(Value::as_str).map(str::to_string)).unwrap_or_else(|| project.clone()),
-                project,
-                host: host.label,
-                host_icon: host.icon,
-                host_exe: host.exe,
-                state,
-                activity,
-                context_tokens: t.context_tokens,
-                context_limit: context_limit(&model),
-                model: model_name(&model),
-                running_secs: now_ms().saturating_sub(started) / 1000,
-                prompt: t.prompt.unwrap_or_default(),
-                feed: t.feed,
-                cost_usd: t.cost_usd,
-                lines_added: t.lines_added,
-                lines_removed: t.lines_removed,
-            },
-        ));
+        let host = host_of(&root, pid as u32, str_of("entrypoint"));
+        out.push(json!({
+            "id": id,
+            "pid": pid,
+            "status": str_of("status"),
+            "waiting_for": reg.get("waitingFor").and_then(Value::as_str).unwrap_or(""),
+            "started": started,
+            "updated": reg.get("statusUpdatedAt").and_then(Value::as_u64).unwrap_or(started),
+            "name": str_of("name"),
+            "cwd": str_of("cwd"),
+            "title": t.title,
+            "prompt": t.prompt,
+            "model": t.model,
+            "context_tokens": t.context_tokens,
+            "cost_usd": t.cost_usd,
+            "lines_added": t.lines_added,
+            "lines_removed": t.lines_removed,
+            "feed": t.feed,
+            "last": t.last,
+            "host": { "label": host.label, "icon": host.icon, "exe": host.exe },
+        }));
     }
-    out.sort_by_key(|(k, _)| *k);
-    out.into_iter().map(|(_, c)| c).collect()
-}
-
-// ---- brief-show: the island drops down when a session needs you or finishes ----
-
-/// a session, as far as its registry file says (no transcript is read until something happens)
-struct Live {
-    id: String,
-    /// waiting | busy | idle
-    kind: &'static str,
-    updated: u64,
-}
-
-fn live_sessions() -> Vec<Live> {
-    let mut best: HashMap<String, Live> = HashMap::new();
-    for Reg { reg, .. } in registries(true) {
-        let Some(id) = reg.get("sessionId").and_then(Value::as_str) else { continue };
-        if !matches!(reg.get("kind").and_then(Value::as_str).unwrap_or(""), "interactive" | "") {
-            continue;
-        }
-        let status = reg.get("status").and_then(Value::as_str).unwrap_or("");
-        let waiting = reg.get("waitingFor").and_then(Value::as_str).map_or(false, |s| !s.is_empty()) || status.contains("wait");
-        let kind = if waiting { "waiting" } else if status == "busy" { "busy" } else { "idle" };
-        let started = reg.get("startedAt").and_then(Value::as_u64).unwrap_or(0);
-        let updated = reg.get("statusUpdatedAt").and_then(Value::as_u64).unwrap_or(started);
-        // a session can have more than one process: the one that changed last is the live one
-        if best.get(id).map_or(true, |b| updated > b.updated) {
-            best.insert(id.to_string(), Live { id: id.to_string(), kind, updated });
-        }
-    }
-    best.into_values().collect()
-}
-
-/// is the window that holds this session the one in front? Then the person can see it already.
-fn host_in_front(exe: &Option<String>, icon: &str, project: &str) -> bool {
-    use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowTextW, GetWindowThreadProcessId};
-    let Some(exe) = exe.as_deref() else { return false };
-    unsafe {
-        let hwnd = GetForegroundWindow();
-        if hwnd.0.is_null() {
-            return false;
-        }
-        let mut pid = 0u32;
-        GetWindowThreadProcessId(hwnd, Some(&mut pid));
-        let mut sys = System::new();
-        let p = sysinfo::Pid::from_u32(pid);
-        sys.refresh_processes_specifics(ProcessesToUpdate::Some(&[p]), true, ProcessRefreshKind::new().with_exe(UpdateKind::OnlyIfNotSet));
-        let name = |s: &str| basename(s).to_lowercase();
-        let same_app = sys.process(p).and_then(|p| p.exe()).map_or(false, |e| name(&e.to_string_lossy()) == name(exe));
-        if !same_app {
-            return false;
-        }
-        // an editor holds one window per folder: only the one that shows this project counts
-        if icon == "term" {
-            return true;
-        }
-        let mut buf = [0u16; 512];
-        let n = GetWindowTextW(hwnd, &mut buf).max(0) as usize;
-        String::from_utf16_lossy(&buf[..n]).to_lowercase().contains(&project.to_lowercase())
-    }
-}
-
-fn brief(ctx: &Ctx, id: &str, kind: &'static str) {
-    if ctx.state.hub_is_open() || ctx.state.plugins.quiet() {
-        return; // the hub shows the cards already; a game is not interrupted
-    }
-    // (a session that needs you rings through do not disturb; one that finished does not)
-    if ctx.gate(if kind == "waiting" { 90 } else { 60 }) != Gate::Open {
-        return;
-    }
-    let Some(c) = cards().into_iter().find(|c| c.id == id) else { return };
-    if host_in_front(&c.host_exe, c.host_icon, &c.project) {
-        return;
-    }
-    let used = if c.context_limit > 0 { (c.context_tokens as f64 / c.context_limit as f64).min(1.0) } else { 0.0 };
-    ctx.state.notif.lock().unwrap().push_brief(
-        c.title.clone(),
-        crate::notify::Brief { id: c.id.clone(), state: kind, host_icon: c.host_icon.to_string(), host_exe: c.host_exe.clone(), project: c.project.clone(), ctx: used, ..Default::default() },
-    );
-}
-
-/// Watches the registry files (a few tiny reads every 2 s) and queues a brief-show when a
-/// session starts waiting for you or finishes a turn that took a while.
-fn watch(ctx: Ctx) {
-    std::thread::spawn(move || {
-        // id -> (kind, when the current busy stretch began)
-        let mut seen: HashMap<String, (&'static str, u64)> = HashMap::new();
-        loop {
-            std::thread::sleep(Duration::from_secs(2));
-            if !ctx.on() || !ctx.flag("alerts", true) {
-                seen.clear();
-                continue;
-            }
-            let mut present = HashSet::new();
-            for s in live_sessions() {
-                present.insert(s.id.clone());
-                let prev = seen.get(&s.id).copied();
-                match (prev.map(|p| p.0), s.kind) {
-                    (Some("waiting"), k) if k != "waiting" => ctx.state.notif.lock().unwrap().cancel_brief(&s.id),
-                    (p, "waiting") if p != Some("waiting") => brief(&ctx, &s.id, "waiting"),
-                    // a turn that took no more than a few seconds is a quick answer, not news
-                    (Some("busy"), "idle") if s.updated.saturating_sub(prev.map_or(0, |p| p.1)) >= 5000 => brief(&ctx, &s.id, "finished"),
-                    _ => {}
-                }
-                let busy_since = match prev {
-                    Some(("busy", t)) if s.kind == "busy" => t,
-                    _ => s.updated,
-                };
-                seen.insert(s.id, (s.kind, busy_since));
-            }
-            seen.retain(|id, _| present.contains(id));
-        }
-    });
-}
-
-/// the sessions as cards, and the usage of the Claude limits as rings
-#[derive(Default)]
-pub struct ClaudeCode {
-    usage: usage::Usage,
-}
-
-impl Native for ClaudeCode {
-    fn manifest(&self) -> Manifest {
-        manifest()
-    }
-
-    fn start(&self, ctx: &Ctx) {
-        watch(ctx.clone());
-        self.usage.start(ctx);
-    }
-
-    fn switched(&self, ctx: &Ctx, _on: bool) {
-        self.usage.settled(ctx);
-    }
-
-    fn changed(&self, ctx: &Ctx, key: &str) {
-        if key == "usage" {
-            self.usage.settled(ctx);
-        }
-    }
-
-    fn cards(&self, _ctx: &Ctx) -> Option<Value> {
-        serde_json::to_value(cards()).ok()
-    }
-
-    fn status(&self, ctx: &Ctx) -> Option<String> {
-        self.usage.status(ctx)
-    }
-
-    fn filled(&self, _ctx: &Ctx, _action: &str) -> bool {
-        self.usage.signed_in()
-    }
-
-    fn call(&self, ctx: &Ctx, cmd: &str, args: &Value) -> Result<Value, String> {
-        match cmd {
-            "dismiss" => {
-                dismiss(args.get("id").and_then(Value::as_str).unwrap_or("").to_string());
-                Ok(Value::Null)
-            }
-            _ => self.usage.call(ctx, cmd, args),
-        }
-    }
-
-    fn adopt(&self, old: &Value, default_on: bool) -> Adopted {
-        adopted(old, default_on)
-    }
+    Value::Array(out)
 }
 
 #[cfg(test)]
@@ -782,14 +482,6 @@ mod tests {
     }
 
     #[test]
-    fn names_models() {
-        assert_eq!(model_name("claude-sonnet-5-5"), "Sonnet 5.5");
-        assert_eq!(model_name("claude-haiku-4-5-20251001"), "Haiku 4.5");
-        assert_eq!(model_name("claude-fable-5-1"), "Fable 5.1");
-        assert_eq!(model_name(""), "");
-    }
-
-    #[test]
     fn reads_the_list_of_running_distros() {
         // wsl.exe writes UTF-16 with a byte order mark and CRLF line ends
         let text = "\u{feff}Ubuntu-22.04\r\ndocker-desktop\r\n\r\n";
@@ -811,6 +503,6 @@ mod tests {
     #[test]
     fn lists_the_sessions_of_this_machine() {
         // must never panic, whatever is (or is not) installed
-        let _ = cards();
+        assert!(sessions().is_array());
     }
 }

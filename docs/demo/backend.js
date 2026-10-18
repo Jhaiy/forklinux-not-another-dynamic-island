@@ -85,6 +85,9 @@
     bg_hub: "",
     bg_dim: 50,
     glow_intensity: 70,
+    card_radius: 18,
+    hub_radius: 28,
+    rest_radius: 20,
     page_preview: true,
     page_images: true,
     page_blocklist: "",
@@ -122,7 +125,7 @@
       this.nextId = 0;
     }
     dwell(n) {
-      const s = n.brief && n.brief.state;
+      const s = n.brief && (n.brief.tone === "waiting" ? "waiting" : n.brief.state);
       return ((n.brief && n.brief.dwell_ms) || (s === "waiting" ? 8000 : s ? 5000 : NOTIF_MS)) / 1000;
     }
     push(title, body) {
@@ -151,8 +154,9 @@
     pushBrief(title, brief) {
       this.queue = this.queue.filter((n) => !(n.brief && n.brief.id === brief.id));
       const n = { id: 0, title, body: "", action: null, brief };
-      if (brief.state === "waiting") {
-        let at = this.queue.findIndex((q) => !(q.brief && q.brief.state === "waiting"));
+      const waits = (b) => b && (b.state === "waiting" || b.tone === "waiting");
+      if (waits(brief)) {
+        let at = this.queue.findIndex((q) => !waits(q.brief));
         if (at < 0) at = this.queue.length;
         this.queue.splice(at, 0, n);
       } else {
@@ -161,7 +165,7 @@
     }
     cancelBrief(id) {
       this.queue = this.queue.filter((n) => !(n.brief && n.brief.id === id));
-      if (this.current && this.current.brief && this.current.brief.id === id && this.current.brief.state === "waiting") this.dismissCurrent();
+      if (this.current && this.current.brief && this.current.brief.id === id && (this.current.brief.state === "waiting" || this.current.brief.tone === "waiting")) this.dismissCurrent();
     }
     currentIsBrief() {
       return !!(this.current && this.current.brief);
@@ -234,10 +238,14 @@
   const st = NADI.st;
   const ptr = NADI.ptr;
 
+  // (the island's frame, and the settings window's, when it is open: it is a page of its own, as in the app)
+  NADI.extraFrames = new Set();
   NADI.emit = (name, payload) => {
-    try {
-      NADI.frame.contentWindow.__nadiEmit(name, payload);
-    } catch (_) {}
+    for (const f of [NADI.frame, ...NADI.extraFrames]) {
+      try {
+        f.contentWindow.__nadiEmit(name, payload);
+      } catch (_) {}
+    }
   };
   NADI.pushHistory = () => NADI.emit("notification-history-tick", NADI.notif.history());
 
@@ -337,7 +345,10 @@
     settings = { ...s };
     persist();
     if (settings.accent_color !== accent) NADI.onAccent?.(settings.accent_color);
+    NADI.emit("settings-changed", null);
   };
+  C.open_settings = ({ page }) => NADI.openSettings?.(page);
+  C.settings_window = ({ action }) => NADI.closeSettings?.(action);
 
   // ---------------------------------------------------------------- the poll loop (spawn_edge_poll)
   // demo stand-in for the real fullscreen guard (winutil): the browser has no
@@ -431,7 +442,7 @@
             : "notification"
           : st.usagePeekUntil > now()
             ? "usage_peek"
-            : st.hasMedia
+            : st.hasMedia && NADI.world.npPill?.()
               ? "media"
               : st.hasGame
                 ? "game"
@@ -449,7 +460,7 @@
         velW.v = 0;
         velH.v = 0;
         // (what is playing is the Now playing plugin's pill now: the page names it by its plugin)
-        NADI.emit("view-tick", wantView === "media" ? "pg-now-playing" : wantView === "work" ? "pg-work" : wantView);
+        NADI.emit("view-tick", wantView === "media" ? "pg-now-playing" : wantView === "work" ? "pg-work" : wantView === "game" ? "pg-games" : wantView === "usage_peek" ? "pg-claude-usage" : wantView);
         if (wantView !== "idle") {
           st.shown = true;
           edgeRevealed = false;
